@@ -1,0 +1,2409 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Focuso 网页版 · 演示 + 出镜</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #000;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    user-select: none;
+  }
+
+  /* PPT iframe 全屏 */
+  #pptFrame {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: none;
+    z-index: 1;
+  }
+
+  /* 桌面/应用窗口源：作为 iframe 之上的覆盖层，开启时盖住 iframe，停止时露出 iframe */
+  #desktopVideo {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #000;
+    z-index: 2;
+    display: none;
+  }
+  #desktopVideo.show { display: block; }
+
+  /* 桌面源占位提示（仅在没加载 HTML 且未开启桌面源时显示） */
+  .desktop-placeholder {
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    color: rgba(255,255,255,0.55);
+    font-size: 14px;
+    background: #0b0b0b;
+    pointer-events: none;
+  }
+  .desktop-placeholder.show { display: flex; }
+  .desktop-placeholder .big { font-size: 48px; }
+  .desktop-placeholder .hint-row { color: rgba(255,255,255,0.35); font-size: 12px; }
+
+  /* 摄像头气泡 */
+  .bubble {
+    position: fixed;
+    z-index: 1000;
+    border-radius: 50%;
+    overflow: hidden;
+    cursor: move;
+    transition: box-shadow 0.3s, width 0.4s ease, height 0.4s ease;
+  }
+
+  .bubble video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .bubble.mirrored video {
+    transform: scaleX(-1);
+  }
+
+  /* 边框样式 */
+  .bubble.ring-none {
+    box-shadow: 0 4px 24px rgba(0,0,0,0.6);
+  }
+  .bubble.ring-white {
+    box-shadow:
+      0 0 0 3px rgba(255,255,255,0.85),
+      0 4px 24px rgba(0,0,0,0.5);
+  }
+  .bubble.ring-glow {
+    box-shadow:
+      0 0 0 3px #4f8cff,
+      0 0 20px rgba(79,140,255,0.35),
+      0 4px 24px rgba(0,0,0,0.5);
+  }
+  .bubble.ring-green {
+    box-shadow:
+      0 0 0 3px #34d399,
+      0 0 20px rgba(52,211,153,0.3),
+      0 4px 24px rgba(0,0,0,0.5);
+  }
+  .bubble.ring-gradient {
+    box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+  }
+  .bubble.ring-gradient::before {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border-radius: 50%;
+    background: conic-gradient(#ff6b6b, #ffa500, #ffd93d, #6bcb77, #4d96ff, #9b59b6, #ff6b6b);
+    z-index: -1;
+  }
+
+  /* 启动面板 */
+  .launcher {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: #3C3C3C;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .launcher-box {
+    width: 520px;
+    max-width: 90vw;
+  }
+
+  .launcher h1 {
+    font-size: 28px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 6px;
+  }
+
+  .launcher .subtitle {
+    color: rgba(255,255,255,0.4);
+    font-size: 14px;
+    margin-bottom: 32px;
+  }
+
+  .launcher label {
+    display: block;
+    color: rgba(255,255,255,0.6);
+    font-size: 13px;
+    margin-bottom: 8px;
+    font-weight: 500;
+  }
+
+  .file-drop {
+    border: 2px dashed rgba(255,255,255,0.15);
+    border-radius: 12px;
+    padding: 40px 24px;
+    text-align: center;
+    color: rgba(255,255,255,0.4);
+    font-size: 14px;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    margin-bottom: 24px;
+    position: relative;
+  }
+
+  .file-drop:hover, .file-drop.dragover {
+    border-color: rgba(79,140,255,0.6);
+    background: rgba(79,140,255,0.05);
+  }
+
+  .file-drop .icon { font-size: 32px; margin-bottom: 8px; }
+  .file-drop .hint { font-size: 12px; color: rgba(255,255,255,0.25); margin-top: 8px; }
+  .file-drop input { display: none; }
+
+  .file-drop.has-file {
+    border-color: rgba(52,211,153,0.5);
+    background: rgba(52,211,153,0.05);
+    color: #34d399;
+  }
+
+  .launch-btn {
+    width: 100%;
+    padding: 14px;
+    background: #4f8cff;
+    border: none;
+    border-radius: 10px;
+    color: #fff;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.1s;
+  }
+
+  .launch-btn:hover { background: #3a7af0; }
+  .launch-btn:active { transform: scale(0.98); }
+  .launch-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .error-msg {
+    color: #ff6b6b;
+    font-size: 13px;
+    margin-top: 12px;
+    display: none;
+    text-align: center;
+  }
+
+  /* 控制栏 */
+  .toolbar {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 2000;
+    display: flex;
+    gap: 4px;
+    padding: 5px 8px;
+    background: rgba(0,0,0,0.7);
+    backdrop-filter: blur(16px);
+    border-radius: 16px;
+    border: 1px solid rgba(255,255,255,0.08);
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+  }
+
+  .toolbar.show {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .toolbar button {
+    background: rgba(255,255,255,0.08);
+    border: none;
+    color: rgba(255,255,255,0.7);
+    padding: 6px 12px;
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: background 0.2s, color 0.2s;
+    white-space: nowrap;
+    font-family: -apple-system, sans-serif;
+  }
+
+  .toolbar button:hover {
+    background: rgba(255,255,255,0.18);
+    color: #fff;
+  }
+
+  .toolbar button.active {
+    background: rgba(79,140,255,0.4);
+    color: #fff;
+  }
+
+  .toolbar .sep {
+    width: 1px;
+    background: rgba(255,255,255,0.1);
+    margin: 4px 4px;
+  }
+
+  /* 位置预设指示器 */
+  .pos-hint {
+    position: fixed;
+    z-index: 3000;
+    background: rgba(0,0,0,0.7);
+    color: #fff;
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+  }
+
+  .pos-hint.show { opacity: 1; }
+
+  /* 快捷键提示 */
+  .shortcuts-hint {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 5000;
+    background: rgba(0,0,0,0.85);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 16px;
+    padding: 32px 40px;
+    color: #fff;
+    display: none;
+    min-width: 360px;
+  }
+
+  .shortcuts-hint.show { display: block; }
+
+  .shortcuts-hint h3 {
+    font-size: 16px;
+    margin-bottom: 20px;
+    color: rgba(255,255,255,0.9);
+  }
+
+  .shortcuts-hint .row {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    font-size: 13px;
+  }
+
+  .shortcuts-hint .key {
+    background: rgba(255,255,255,0.1);
+    padding: 2px 10px;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 12px;
+    color: rgba(255,255,255,0.8);
+  }
+
+  .shortcuts-hint .desc {
+    color: rgba(255,255,255,0.5);
+  }
+
+  /* 常驻逃生按钮 — iframe 抢焦点时也能找回工具栏 */
+  .escape-pin {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    z-index: 99999;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.45);
+    color: rgba(255,255,255,0.6);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 18px;
+    font-weight: bold;
+    line-height: 1;
+    user-select: none;
+    transition: background 0.2s, color 0.2s, transform 0.2s;
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.1);
+  }
+  .escape-pin:hover {
+    background: rgba(0,0,0,0.8);
+    color: #fff;
+    transform: scale(1.1);
+  }
+  .escape-pin.visible { display: flex; }
+  .escape-pin.locked {
+    background: rgba(79,140,255,0.6);
+    color: #fff;
+  }
+
+  /* 录制指示器 */
+  .rec-indicator {
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    z-index: 99999;
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 12px 5px 10px;
+    background: rgba(0,0,0,0.7);
+    backdrop-filter: blur(8px);
+    border-radius: 16px;
+    border: 1px solid rgba(255,80,80,0.4);
+    color: #fff;
+    font-size: 12px;
+    font-family: -apple-system, monospace;
+    user-select: none;
+  }
+  .rec-indicator.show { display: flex; }
+  .rec-indicator .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #ff4040;
+    box-shadow: 0 0 8px rgba(255,64,64,0.8);
+    animation: rec-pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes rec-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.8); }
+  }
+  .rec-indicator .label { color: rgba(255,255,255,0.6); font-size: 11px; }
+  .rec-indicator .time { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .rec-indicator .stop-btn {
+    margin-left: 6px;
+    background: rgba(255,80,80,0.2);
+    border: none;
+    color: #fff;
+    padding: 2px 10px;
+    border-radius: 10px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .rec-indicator .stop-btn:hover { background: rgba(255,80,80,0.5); }
+
+  /* 工具栏录制按钮高亮 */
+  .toolbar button.recording {
+    background: rgba(255,64,64,0.5);
+    color: #fff;
+  }
+
+  /* 画幅选择菜单（向上弹出） */
+  .aspect-wrapper {
+    position: relative;
+    display: inline-flex;
+  }
+  .aspect-menu {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    right: 0;
+    display: none;
+    flex-direction: column;
+    min-width: 240px;
+    background: rgba(20,20,20,0.96);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px;
+    padding: 4px;
+    backdrop-filter: blur(16px);
+    z-index: 2100;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  }
+  .aspect-menu.show { display: flex; }
+  .aspect-menu-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    color: rgba(255,255,255,0.85);
+    font-family: -apple-system, sans-serif;
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s;
+  }
+  .aspect-menu-item:hover { background: rgba(79,140,255,0.2); color: #fff; }
+  .aspect-menu-item.active {
+    background: rgba(79,140,255,0.35);
+    color: #fff;
+  }
+  .aspect-menu-item .label { font-weight: 600; font-size: 13px; }
+  .aspect-menu-item .desc { color: rgba(255,255,255,0.45); font-size: 11px; }
+  .aspect-menu-item.active .desc { color: rgba(255,255,255,0.7); }
+
+  /* 画幅黑边蒙版（resize 失败时降级用） */
+  .letterbox {
+    position: fixed;
+    background: #000;
+    z-index: 50;          /* 高于 iframe(1)，低于 bubble(1000) */
+    pointer-events: none;
+    display: none;
+  }
+  .letterbox.active { display: block; }
+
+  /* 启动面板的独立窗口按钮 */
+  .popup-btn {
+    width: 100%;
+    margin-top: 12px;
+    padding: 10px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px;
+    color: rgba(255,255,255,0.7);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+  }
+  .popup-btn:hover {
+    background: rgba(79,140,255,0.15);
+    color: #fff;
+    border-color: rgba(79,140,255,0.4);
+  }
+
+  /* 启动面板：选文件夹链接 */
+  .file-drop a {
+    color: #4f8cff;
+    cursor: pointer;
+    pointer-events: auto;
+  }
+  .file-drop a:hover { text-decoration: underline; }
+
+  /* 已选状态条 — 始终独立显示，不被 picker-menu 遮挡 */
+  .file-drop .drop-title { font-size: 14px; margin-bottom: 4px; }
+  .file-status {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    margin-top: -16px;
+    margin-bottom: 24px;
+    padding: 10px 14px;
+    background: rgba(52,211,153,0.08);
+    border: 1px solid rgba(52,211,153,0.4);
+    border-radius: 8px;
+    font-size: 13px;
+  }
+  .file-status.show { display: flex; }
+  .file-status-check {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #34d399;
+    color: #fff;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+  }
+  .file-status-label {
+    flex: 1;
+    color: rgba(255,255,255,0.85);
+    word-break: break-all;
+    line-height: 1.4;
+  }
+  .file-status-clear {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.5);
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    transition: background 0.15s, color 0.15s;
+  }
+  .file-status-clear:hover {
+    background: rgba(255,80,80,0.2);
+    color: #fff;
+    border-color: rgba(255,80,80,0.4);
+  }
+
+  /* 点击后弹出的二选一菜单（叠在 file-drop 内） */
+  .picker-menu {
+    position: absolute;
+    inset: 8px;
+    display: none;
+    gap: 12px;
+    align-items: stretch;
+    justify-content: center;
+    padding: 12px;
+    background: rgba(15,15,15,0.96);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    backdrop-filter: blur(8px);
+    z-index: 10;
+    animation: pickerFade 0.15s ease-out;
+  }
+  .picker-menu.show { display: flex; }
+  @keyframes pickerFade {
+    from { opacity: 0; transform: scale(0.96); }
+    to   { opacity: 1; transform: scale(1); }
+  }
+  .picker-option {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px;
+    color: rgba(255,255,255,0.85);
+    cursor: pointer;
+    font-family: inherit;
+    text-align: left;
+    transition: background 0.15s, border-color 0.15s, transform 0.15s;
+  }
+  .picker-option:hover {
+    background: rgba(79,140,255,0.15);
+    border-color: rgba(79,140,255,0.5);
+    color: #fff;
+    transform: translateY(-1px);
+  }
+  .picker-option .picker-icon { font-size: 28px; line-height: 1; }
+  .picker-text { display: flex; flex-direction: column; gap: 2px; }
+  .picker-title { font-size: 14px; font-weight: 600; color: #fff; }
+  .picker-desc { font-size: 11px; color: rgba(255,255,255,0.4); }
+
+  /* HTML 入口选择器 */
+  .html-picker {
+    display: none;
+    margin-bottom: 24px;
+    max-height: 220px;
+    overflow-y: auto;
+    background: rgba(0,0,0,0.2);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px;
+    padding: 4px;
+  }
+  .html-picker.show { display: block; }
+  .html-picker-title {
+    color: rgba(255,255,255,0.5);
+    font-size: 12px;
+    padding: 8px 10px 4px;
+  }
+  .html-picker-item {
+    padding: 8px 12px;
+    border-radius: 6px;
+    color: rgba(255,255,255,0.7);
+    font-size: 13px;
+    cursor: pointer;
+    font-family: monospace;
+    word-break: break-all;
+    transition: background 0.15s, color 0.15s;
+  }
+  .html-picker-item:hover {
+    background: rgba(79,140,255,0.15);
+    color: #fff;
+  }
+  .html-picker-item.selected {
+    background: rgba(79,140,255,0.3);
+    color: #fff;
+  }
+</style>
+</head>
+<body>
+
+<!-- 启动面板 -->
+<div class="launcher" id="launcher">
+  <div class="launcher-box">
+    <h1>Presenter</h1>
+    <p class="subtitle">加载 HTML 演示文稿 + 摄像头出镜，一个窗口搞定录屏</p>
+
+    <label>选择 HTML 文件或项目文件夹</label>
+    <div class="file-drop" id="fileDrop">
+      <div class="icon">📄</div>
+      <div class="drop-title">点击选择 HTML 文件或项目文件夹</div>
+      <div class="hint">单文件 · 多页项目均可（也可直接拖拽到此处）</div>
+      <input type="file" id="fileInput" accept=".html,.htm">
+      <input type="file" id="folderInput" webkitdirectory directory multiple>
+
+      <div class="picker-menu" id="pickerMenu">
+        <button class="picker-option" type="button" data-pick="file">
+          <span class="picker-icon">📄</span>
+          <div class="picker-text">
+            <div class="picker-title">单个 HTML 文件</div>
+            <div class="picker-desc">单页演示</div>
+          </div>
+        </button>
+        <button class="picker-option" type="button" data-pick="folder">
+          <span class="picker-icon">📁</span>
+          <div class="picker-text">
+            <div class="picker-title">项目文件夹</div>
+            <div class="picker-desc">多页跳转 · 含资源</div>
+          </div>
+        </button>
+      </div>
+    </div>
+
+    <div class="file-status" id="fileStatus">
+      <span class="file-status-check">✓</span>
+      <span class="file-status-label" id="fileLabel"></span>
+      <button class="file-status-clear" id="clearSelectionBtn" type="button" title="清除当前选择">×</button>
+    </div>
+
+    <div class="html-picker" id="htmlPicker"></div>
+
+    <button class="launch-btn" id="launchBtn">开启演示</button>
+    <button class="popup-btn" type="button" onclick="startDesktopOnly()">📺 跳过 HTML · 直接演示桌面/应用窗口</button>
+    <button class="popup-btn" type="button" onclick="openAsPopup()">🪟 在独立窗口打开（推荐 · 用于自由切换画幅）</button>
+    <div class="error-msg" id="errorMsg"></div>
+  </div>
+</div>
+
+<!-- PPT 内容 -->
+<iframe id="pptFrame" sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe>
+
+<!-- 桌面/应用窗口源（getDisplayMedia 捕获后挂这里，盖在 iframe 之上） -->
+<video id="desktopVideo" autoplay playsinline muted></video>
+
+<!-- 桌面源占位（启动时选「直接演示桌面」会先显示这个，引导用户选择共享内容） -->
+<div class="desktop-placeholder" id="desktopPlaceholder">
+  <div class="big">📺</div>
+  <div>点击下方「桌面源」按钮选择要演示的屏幕 / 应用窗口</div>
+  <div class="hint-row">快捷键 D 同样可以打开 · 摄像头会叠加在画面上</div>
+</div>
+
+<!-- 画幅黑边蒙版（窗口无法 resize 时模拟目标比例） -->
+<div class="letterbox" id="lbTop"></div>
+<div class="letterbox" id="lbBottom"></div>
+<div class="letterbox" id="lbLeft"></div>
+<div class="letterbox" id="lbRight"></div>
+
+<!-- 摄像头气泡 -->
+<div class="bubble mirrored ring-white" id="bubble" style="width:180px;height:180px;bottom:40px;right:40px;">
+  <video id="video" autoplay playsinline muted></video>
+</div>
+
+<!-- 控制栏 -->
+<div class="toolbar" id="toolbar">
+  <div class="aspect-wrapper">
+    <button id="btnSize" title="点击选择摄像头大小">大小:M</button>
+    <div class="aspect-menu" id="sizeMenu"></div>
+  </div>
+  <div class="aspect-wrapper">
+    <button id="btnPos" title="点击选择摄像头位置">位置:右下</button>
+    <div class="aspect-menu" id="posMenu"></div>
+  </div>
+  <div class="sep"></div>
+  <button onclick="toggleMirror()" id="btnMirror" class="active">镜像</button>
+  <button onclick="cycleRing()" id="btnRing">白框</button>
+  <div class="sep"></div>
+  <button onclick="toggleCam()" id="btnCam">隐藏</button>
+  <div class="sep"></div>
+  <div class="aspect-wrapper">
+    <button id="btnAspect" title="点击选择画幅">画幅:Auto</button>
+    <div class="aspect-menu" id="aspectMenu"></div>
+  </div>
+  <button onclick="openAsPopup()" id="btnPopup" title="在独立窗口打开 · 调画幅必须用独立窗口">🪟</button>
+  <button onclick="togglePrompter()" id="btnPrompter" title="提词器 · PiP 浮窗 · 始终置顶 · 不会被录入">📝 提词器</button>
+  <button onclick="toggleDesktopSource()" id="btnDesktop" title="把桌面 / 应用窗口当作演示源 · 摄像头会叠加在上面 · 录制时选「当前标签」最稳">📺 桌面源</button>
+  <button onclick="toggleRecording()" id="btnRec">🔴 录制</button>
+  <button onclick="showShortcuts()">?</button>
+</div>
+
+<!-- 录制指示器 -->
+<div class="rec-indicator" id="recIndicator">
+  <span class="dot"></span>
+  <span class="label">REC</span>
+  <span class="time" id="recTime">00:00</span>
+  <button class="stop-btn" onclick="stopRecording()">停止</button>
+</div>
+
+<!-- 常驻逃生按钮（始终可点，用于唤回工具栏） -->
+<div class="escape-pin" id="escapePin" title="点击锁定/解锁工具栏 · 焦点丢失时使用">⋯</div>
+
+<!-- 位置提示 -->
+<div class="pos-hint" id="posHint"></div>
+
+<!-- 快捷键提示 -->
+<div class="shortcuts-hint" id="shortcutsHint">
+  <h3>快捷键</h3>
+  <div class="row"><span class="desc">显示/隐藏摄像头</span><span class="key">C</span></div>
+  <div class="row"><span class="desc">切换镜像</span><span class="key">M</span></div>
+  <div class="row"><span class="desc">切换边框样式</span><span class="key">R</span></div>
+  <div class="row"><span class="desc">缩小</span><span class="key">-</span></div>
+  <div class="row"><span class="desc">放大</span><span class="key">+</span></div>
+  <div class="row"><span class="desc">位置：右下/左下/右上/左上</span><span class="key">1 2 3 4</span></div>
+  <div class="row"><span class="desc">显示/隐藏工具栏</span><span class="key">T</span></div>
+  <div class="row"><span class="desc">快捷键帮助</span><span class="key">?</span></div>
+  <div class="row"><span class="desc">PPT 翻页</span><span class="key">↑↓ ←→</span></div>
+  <div class="row"><span class="desc">开始/停止录屏</span><span class="key">S</span></div>
+  <div class="row"><span class="desc">打开/关闭提词器（独立窗口·不被录入）</span><span class="key">P</span></div>
+  <div class="row"><span class="desc">打开/关闭桌面源（把屏幕或 app 窗口当演示画面）</span><span class="key">D</span></div>
+  <div class="row"><span class="desc">切换浏览器窗口画幅 (Auto/16:9/9:16/1:1/4:5/4:3/21:9)</span><span class="key">A</span></div>
+  <div class="row" style="margin-top:12px;"><span class="desc" style="color:rgba(255,255,255,0.3);">鼠标悬停底部显示工具栏 · 滚轮调整大小</span></div>
+</div>
+
+<script>
+const bubble = document.getElementById('bubble');
+const video = document.getElementById('video');
+const launcher = document.getElementById('launcher');
+const pptFrame = document.getElementById('pptFrame');
+const desktopVideo = document.getElementById('desktopVideo');
+const desktopPlaceholder = document.getElementById('desktopPlaceholder');
+const toolbar = document.getElementById('toolbar');
+const posHint = document.getElementById('posHint');
+const shortcutsHint = document.getElementById('shortcutsHint');
+const errorMsg = document.getElementById('errorMsg');
+const escapePin = document.getElementById('escapePin');
+
+let currentSize = 180;
+let currentPos = 'br';
+let camVisible = true;
+let toolbarLocked = false;
+let bubblePosRatio = null; // 拖拽后保存的中心点位置百分比，用于 resize 跟随
+const MARGIN = 40;
+
+// === 边框样式 ===
+const rings = ['ring-white', 'ring-none', 'ring-glow', 'ring-green', 'ring-gradient'];
+const ringLabels = ['白框', '无框', '蓝光', '绿光', '彩虹'];
+let ringIndex = 0;
+
+// === 启动逻辑 ===
+const fileDrop = document.getElementById('fileDrop');
+const fileInput = document.getElementById('fileInput');
+const folderInput = document.getElementById('folderInput');
+const pickerMenu = document.getElementById('pickerMenu');
+const htmlPicker = document.getElementById('htmlPicker');
+const fileLabel = document.getElementById('fileLabel');
+const fileStatus = document.getElementById('fileStatus');
+const clearSelectionBtn = document.getElementById('clearSelectionBtn');
+const launchBtn = document.getElementById('launchBtn');
+
+// 统一收敛已选状态显示：选完任何模式都走这里
+function setFileStatus(text) {
+  if (text) {
+    fileLabel.textContent = text;
+    fileStatus.classList.add('show');
+    fileDrop.classList.add('has-file');
+  } else {
+    fileLabel.textContent = '';
+    fileStatus.classList.remove('show');
+    fileDrop.classList.remove('has-file');
+  }
+}
+
+clearSelectionBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  resetFolderState();
+  fileInput.value = '';
+  folderInput.value = '';
+});
+
+let selectedFileURL = null;
+
+// 文件夹模式状态
+let inFolderMode = false;
+const fileMap = new Map();          // path -> File
+const resourceBlobMap = new Map();  // path -> blob URL（普通资源：图片/字体/json/js 等）
+const processedCssMap = new Map();  // path -> blob URL（已重写 url()/@import 的 CSS）
+const processedHtmlMap = new Map(); // path -> blob URL（已重写引用 + 注入 shim 的 HTML）
+let entryPath = null;
+
+// === 统一入口：点击 → 弹二选一菜单；拖拽 → 自动识别（单文件/文件夹/多文件）===
+fileDrop.addEventListener('click', (e) => {
+  // 点击落在菜单内由菜单自己处理；其它位置切换菜单显隐
+  if (e.target.closest('.picker-menu')) return;
+  pickerMenu.classList.toggle('show');
+});
+
+// 二选一菜单：选哪个就触发对应的原生对话框
+pickerMenu.querySelectorAll('.picker-option').forEach(btn => {
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    pickerMenu.classList.remove('show');
+    const type = btn.dataset.pick;
+    if (type === 'file') fileInput.click();
+    else folderInput.click();
+  });
+});
+
+// 点击 file-drop 之外关闭菜单
+document.addEventListener('mousedown', (e) => {
+  if (!pickerMenu.classList.contains('show')) return;
+  if (!fileDrop.contains(e.target)) pickerMenu.classList.remove('show');
+});
+
+fileDrop.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  fileDrop.classList.add('dragover');
+});
+fileDrop.addEventListener('dragleave', () => fileDrop.classList.remove('dragover'));
+fileDrop.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  fileDrop.classList.remove('dragover');
+  pickerMenu.classList.remove('show');
+
+  // 优先识别为文件夹（DataTransferItem.webkitGetAsEntry）
+  const items = e.dataTransfer.items;
+  if (items && items.length === 1 && items[0].kind === 'file') {
+    const entry = items[0].webkitGetAsEntry && items[0].webkitGetAsEntry();
+    if (entry && entry.isDirectory) {
+      const collected = await collectFilesFromEntry(entry);
+      if (collected.length) handleFolderEntries(collected);
+      return;
+    }
+  }
+
+  // 多文件拖入：按文件夹模式处理（使用 webkitRelativePath 或文件名）
+  if (e.dataTransfer.files && e.dataTransfer.files.length > 1) {
+    const collected = Array.from(e.dataTransfer.files).map(f => ({
+      path: f.webkitRelativePath || f.name,
+      file: f
+    }));
+    handleFolderEntries(collected);
+    return;
+  }
+
+  // 单文件
+  const file = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (file) {
+    resetFolderState();
+    handleFile(file);
+  }
+});
+
+fileInput.addEventListener('change', (e) => {
+  if (e.target.files[0]) {
+    resetFolderState();
+    handleFile(e.target.files[0]);
+  }
+});
+
+folderInput.addEventListener('change', (e) => {
+  const files = Array.from(e.target.files || []);
+  if (!files.length) return;
+  const collected = files.map(f => ({
+    path: f.webkitRelativePath || f.name,
+    file: f
+  }));
+  handleFolderEntries(collected);
+});
+
+function handleFile(file) {
+  if (!file.name.match(/\.html?$/i)) {
+    showError('请选择 HTML 文件');
+    return;
+  }
+  selectedFileURL = URL.createObjectURL(file);
+  setFileStatus('单文件 · ' + file.name);
+}
+
+// === 递归读取拖入文件夹的所有文件（FileSystemEntry API） ===
+async function collectFilesFromEntry(rootEntry) {
+  const out = [];
+  async function walk(entry, currentPath) {
+    if (entry.isFile) {
+      const file = await new Promise((res, rej) => entry.file(res, rej));
+      out.push({ path: currentPath, file });
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      const all = [];
+      // readEntries 一次最多返回 100 项，要循环读
+      while (true) {
+        const batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+        if (!batch.length) break;
+        all.push(...batch);
+      }
+      for (const sub of all) {
+        await walk(sub, currentPath + '/' + sub.name);
+      }
+    }
+  }
+  await walk(rootEntry, rootEntry.name);
+  return out;
+}
+
+function resetFolderState() {
+  inFolderMode = false;
+  if (selectedFileURL) {
+    URL.revokeObjectURL(selectedFileURL);
+    selectedFileURL = null;
+  }
+  fileMap.clear();
+  resourceBlobMap.forEach(u => { try { URL.revokeObjectURL(u); } catch (e) {} });
+  resourceBlobMap.clear();
+  processedCssMap.forEach(u => { try { if (u) URL.revokeObjectURL(u); } catch (e) {} });
+  processedCssMap.clear();
+  processedHtmlMap.forEach(u => { try { if (u) URL.revokeObjectURL(u); } catch (e) {} });
+  processedHtmlMap.clear();
+  entryPath = null;
+  htmlPicker.classList.remove('show');
+  htmlPicker.innerHTML = '';
+  setFileStatus(null);
+}
+
+function handleFolderEntries(entries) {
+  resetFolderState();
+  inFolderMode = true;
+
+  // 去掉公共根目录前缀，让相对路径更干净（webkitRelativePath 默认带根目录名）
+  const roots = new Set(entries.map(e => e.path.split('/')[0]));
+  const stripPrefix = roots.size === 1 ? [...roots][0] + '/' : '';
+
+  for (const { path, file } of entries) {
+    const cleanPath = stripPrefix && path.startsWith(stripPrefix)
+      ? path.slice(stripPrefix.length) : path;
+    if (cleanPath) fileMap.set(cleanPath, file);
+  }
+
+  const htmlFiles = [...fileMap.keys()]
+    .filter(p => /\.html?$/i.test(p))
+    .sort();
+
+  if (htmlFiles.length === 0) {
+    showError('文件夹里没有 HTML 文件');
+    inFolderMode = false;
+    return;
+  }
+
+  // 自动选 index.html，找不到则弹出选择器
+  const indexFile = htmlFiles.find(p => /^index\.html?$/i.test(p))
+    || htmlFiles.find(p => /(^|\/)index\.html?$/i.test(p));
+
+  if (indexFile) {
+    entryPath = indexFile;
+    setFileStatus(`文件夹 · ${fileMap.size} 个文件 · 入口：${indexFile}`);
+  } else {
+    showHtmlPicker(htmlFiles);
+  }
+}
+
+function showHtmlPicker(htmlFiles) {
+  htmlPicker.innerHTML = '<div class="html-picker-title">未找到 index.html，请选择入口 HTML：</div>';
+  for (const path of htmlFiles) {
+    const item = document.createElement('div');
+    item.className = 'html-picker-item';
+    item.textContent = path;
+    item.addEventListener('click', () => {
+      htmlPicker.querySelectorAll('.html-picker-item').forEach(el => el.classList.remove('selected'));
+      item.classList.add('selected');
+      entryPath = path;
+      setFileStatus(`文件夹 · ${fileMap.size} 个文件 · 入口：${path}`);
+    });
+    htmlPicker.appendChild(item);
+  }
+  htmlPicker.classList.add('show');
+}
+
+// === 路径解析 ===
+function getDirOf(path) {
+  const idx = path.lastIndexOf('/');
+  return idx >= 0 ? path.slice(0, idx + 1) : '';
+}
+
+function resolvePath(baseDir, ref) {
+  if (ref.startsWith('/')) return ref.slice(1);
+  const base = baseDir.split('/').filter(Boolean);
+  for (const p of ref.split('/')) {
+    if (p === '' || p === '.') continue;
+    if (p === '..') base.pop();
+    else base.push(p);
+  }
+  return base.join('/');
+}
+
+// === 资源 → blob URL：CSS 走 processCssFile，HTML 不在这里处理（留给 postMessage 跳转） ===
+async function getResourceBlobUrl(path) {
+  if (resourceBlobMap.has(path)) return resourceBlobMap.get(path);
+  if (processedCssMap.has(path) && processedCssMap.get(path)) return processedCssMap.get(path);
+  if (processedHtmlMap.has(path) && processedHtmlMap.get(path)) return processedHtmlMap.get(path);
+  const file = fileMap.get(path);
+  if (!file) return null;
+  if (/\.css$/i.test(path)) return await processCssFile(path);
+  if (/\.html?$/i.test(path)) return await processHtmlFile(path);
+  const url = URL.createObjectURL(file);
+  resourceBlobMap.set(path, url);
+  return url;
+}
+
+async function processCssFile(cssPath) {
+  if (processedCssMap.has(cssPath)) return processedCssMap.get(cssPath);
+  const file = fileMap.get(cssPath);
+  if (!file) return null;
+  // 占位：避免循环 @import 时无限递归
+  processedCssMap.set(cssPath, '');
+
+  const text = await file.text();
+  const rewritten = await rewriteCssText(text, getDirOf(cssPath));
+  const blob = new Blob([rewritten], { type: 'text/css' });
+  const url = URL.createObjectURL(blob);
+  processedCssMap.set(cssPath, url);
+  return url;
+}
+
+async function rewriteCssText(text, baseDir) {
+  if (!text) return text;
+  const reps = [];
+  const urlRe = /url\(\s*(['"]?)([^)'"]+)\1\s*\)/g;
+  const importRe = /@import\s+(?:url\()?\s*(['"])([^'"]+)\1\s*\)?/g;
+  let m;
+  while ((m = urlRe.exec(text)) !== null) {
+    reps.push({ start: m.index, end: m.index + m[0].length, ref: m[2], type: 'url' });
+  }
+  while ((m = importRe.exec(text)) !== null) {
+    reps.push({ start: m.index, end: m.index + m[0].length, ref: m[2], type: 'import' });
+  }
+  reps.sort((a, b) => a.start - b.start);
+
+  const resolved = await Promise.all(reps.map(async (r) => {
+    if (/^(https?:|data:|blob:|#)/i.test(r.ref)) return null;
+    const rp = resolvePath(baseDir, r.ref.split('#')[0].split('?')[0]);
+    return await getResourceBlobUrl(rp);
+  }));
+
+  let out = text;
+  for (let i = reps.length - 1; i >= 0; i--) {
+    const r = reps[i];
+    if (!resolved[i]) continue;
+    const replacement = r.type === 'url' ? `url("${resolved[i]}")` : `@import url("${resolved[i]}")`;
+    out = out.slice(0, r.start) + replacement + out.slice(r.end);
+  }
+  return out;
+}
+
+// === 注入到子 HTML 的导航 shim：拦截 a[data-presenter-link] 并通过 postMessage 通知父窗口 ===
+const NAVIGATION_SHIM = `
+(function(){
+  document.addEventListener('click', function(e) {
+    var a = e.target && e.target.closest ? e.target.closest('a[data-presenter-link]') : null;
+    if (!a) return;
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      window.parent.postMessage({
+        type: 'presenter-nav',
+        path: a.getAttribute('data-presenter-link')
+      }, '*');
+    } catch (err) {}
+  }, true);
+})();
+`;
+
+async function processHtmlFile(htmlPath) {
+  if (processedHtmlMap.has(htmlPath) && processedHtmlMap.get(htmlPath)) {
+    return processedHtmlMap.get(htmlPath);
+  }
+  const file = fileMap.get(htmlPath);
+  if (!file) return null;
+  // 占位避免循环引用
+  processedHtmlMap.set(htmlPath, '');
+
+  const text = await file.text();
+  const dir = getDirOf(htmlPath);
+  const doc = new DOMParser().parseFromString(text, 'text/html');
+
+  const tasks = [];
+  doc.querySelectorAll('[src], [href], [poster], [data-src]').forEach(el => {
+    tasks.push(rewriteElementRef(el, dir));
+  });
+  doc.querySelectorAll('[srcset]').forEach(el => {
+    tasks.push(rewriteSrcset(el, dir));
+  });
+  await Promise.all(tasks);
+
+  // inline <style>
+  for (const style of doc.querySelectorAll('style')) {
+    style.textContent = await rewriteCssText(style.textContent || '', dir);
+  }
+  // inline style="..." 上的 url(...)
+  for (const el of doc.querySelectorAll('[style]')) {
+    const s = el.getAttribute('style') || '';
+    if (s.includes('url(')) {
+      el.setAttribute('style', await rewriteCssText(s, dir));
+    }
+  }
+
+  // 注入跳转 shim
+  const shim = doc.createElement('script');
+  shim.textContent = NAVIGATION_SHIM;
+  (doc.body || doc.documentElement).appendChild(shim);
+
+  const serialized = '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
+  const blob = new Blob([serialized], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  processedHtmlMap.set(htmlPath, url);
+  return url;
+}
+
+async function rewriteElementRef(el, baseDir) {
+  const tag = el.tagName.toLowerCase();
+  let attr = null;
+  if (el.hasAttribute('src')) attr = 'src';
+  else if (el.hasAttribute('href')) attr = 'href';
+  else if (el.hasAttribute('poster')) attr = 'poster';
+  else if (el.hasAttribute('data-src')) attr = 'data-src';
+  if (!attr) return;
+
+  const ref = el.getAttribute(attr);
+  if (!ref) return;
+  if (/^(https?:|data:|blob:|javascript:|mailto:|tel:)/i.test(ref)) return;
+  if (ref.startsWith('#')) return; // 页内锚点不处理
+
+  const [pathPart, hashPart] = ref.split('#');
+  const cleanRef = pathPart.split('?')[0];
+  if (!cleanRef) return;
+  const resolved = resolvePath(baseDir, cleanRef);
+  const hash = hashPart ? '#' + hashPart : '';
+
+  // <a> 指向项目内 HTML：拦截走 postMessage
+  if (tag === 'a' && /\.html?$/i.test(resolved)) {
+    if (fileMap.has(resolved)) {
+      el.setAttribute('data-presenter-link', resolved + hash);
+      el.setAttribute('href', '#');
+    }
+    return;
+  }
+  // <a> 指向其他类型文件（PDF/图片/zip 等）：替换为 blob URL，让浏览器直接打开
+  if (tag === 'a') {
+    if (fileMap.has(resolved)) {
+      const url = await getResourceBlobUrl(resolved);
+      if (url) el.setAttribute('href', url + hash);
+    }
+    return;
+  }
+  // 其它元素（img/script/link/source/video/audio/iframe/embed/object 等）
+  if (fileMap.has(resolved)) {
+    const url = await getResourceBlobUrl(resolved);
+    if (url) el.setAttribute(attr, url);
+  }
+}
+
+async function rewriteSrcset(el, baseDir) {
+  const srcset = el.getAttribute('srcset');
+  if (!srcset) return;
+  const items = srcset.split(',').map(s => s.trim()).filter(Boolean);
+  const rewritten = await Promise.all(items.map(async (item) => {
+    const parts = item.split(/\s+/);
+    const ref = parts[0];
+    if (!ref || /^(https?:|data:|blob:)/i.test(ref)) return item;
+    const resolved = resolvePath(baseDir, ref.split('#')[0].split('?')[0]);
+    if (fileMap.has(resolved)) {
+      const url = await getResourceBlobUrl(resolved);
+      if (url) parts[0] = url;
+    }
+    return parts.join(' ');
+  }));
+  el.setAttribute('srcset', rewritten.join(', '));
+}
+
+// 接收子 HTML 的跳转请求
+window.addEventListener('message', async (e) => {
+  if (!e.data || e.data.type !== 'presenter-nav') return;
+  const raw = e.data.path;
+  if (typeof raw !== 'string') return;
+  const target = raw.split('#')[0];
+  const hash = raw.includes('#') ? '#' + raw.split('#').slice(1).join('#') : '';
+  if (!fileMap.has(target)) {
+    flashHint('找不到：' + target);
+    return;
+  }
+  const url = await processHtmlFile(target);
+  if (url) pptFrame.src = url + hash;
+});
+
+launchBtn.addEventListener('click', startPresentation);
+
+async function startPresentation() {
+  let url;
+  if (inFolderMode) {
+    if (!entryPath) { showError('请先选择入口 HTML'); return; }
+    url = await processHtmlFile(entryPath);
+    if (!url) { showError('入口 HTML 加载失败'); return; }
+  } else {
+    if (!selectedFileURL) { showError('请先选择 HTML 文件'); return; }
+    url = selectedFileURL;
+  }
+
+  pptFrame.src = url;
+
+  // 开启摄像头
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 720 }, height: { ideal: 720 }, facingMode: 'user' },
+      audio: false
+    });
+    video.srcObject = stream;
+  } catch (err) {
+    showError('摄像头访问失败：' + err.message);
+    return;
+  }
+
+  launcher.style.display = 'none';
+  setPos('br');
+  toolbar.classList.add('show');
+  escapePin.classList.add('visible');
+
+  // 3秒后自动隐藏工具栏
+  setTimeout(() => {
+    if (!toolbarLocked) toolbar.classList.remove('show');
+  }, 3000);
+
+  // iframe 加载完成后注入事件桥接
+  pptFrame.addEventListener('load', bridgeIframeEvents);
+}
+
+// === iframe 事件桥接（同源时生效，跨域则降级到逃生按钮） ===
+function bridgeIframeEvents() {
+  let iframeDoc;
+  try {
+    iframeDoc = pptFrame.contentDocument;
+    if (!iframeDoc) throw new Error('contentDocument 不可用');
+  } catch (err) {
+    console.warn('iframe 跨域，键盘/鼠标事件无法转发，请用右上角 ⋯ 按钮唤回工具栏');
+    return;
+  }
+
+  const cameraKeys = new Set(['c','m','r','-','_','=','+','1','2','3','4','t','s','a','p','d','?','escape']);
+  iframeDoc.addEventListener('keydown', (e) => {
+    if (cameraKeys.has(e.key.toLowerCase())) {
+      document.dispatchEvent(new KeyboardEvent('keydown', {
+        key: e.key, code: e.code, bubbles: true
+      }));
+    }
+  });
+
+  // 鼠标移动转发，让靠近底部时工具栏能浮出（节流到每帧一次）
+  let mmScheduled = false, lastMM = null;
+  iframeDoc.addEventListener('mousemove', (e) => {
+    lastMM = { x: e.clientX, y: e.clientY };
+    if (mmScheduled) return;
+    mmScheduled = true;
+    requestAnimationFrame(() => {
+      mmScheduled = false;
+      document.dispatchEvent(new MouseEvent('mousemove', {
+        clientX: lastMM.x, clientY: lastMM.y, bubbles: true
+      }));
+    });
+  });
+}
+
+// === 逃生按钮：点击锁定/解锁工具栏，并强制焦点回父窗口 ===
+escapePin.addEventListener('click', () => {
+  toolbarLocked = !toolbarLocked;
+  toolbar.classList.toggle('show', toolbarLocked);
+  escapePin.classList.toggle('locked', toolbarLocked);
+  flashHint(toolbarLocked ? '工具栏已锁定' : '工具栏自动隐藏');
+  window.focus(); // 把焦点拽回来，恢复快捷键
+});
+
+// === 提词器：优先 Document Picture-in-Picture（无浏览器 chrome、始终置顶、紧凑浮窗），
+//     不支持时降级到 window.open。两种模式都不会被当前标签录入。===
+const btnPrompter = document.getElementById('btnPrompter');
+
+let prompterWindow = null;     // 当前打开的 PiP/popup window
+let prompterIsPip = false;
+let prompterWatchTimer = null;
+
+const PROMPTER_STYLE = `
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:100%; height:100%; overflow:hidden;
+    font-family:-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif;
+    user-select:none; }
+  body { background:#0b0b0b; color:#fff; display:flex; flex-direction:column; }
+  .topbar { display:flex; gap:6px; padding:6px 8px; flex-wrap:wrap; align-items:center;
+    background:#161616; border-bottom:1px solid rgba(255,255,255,0.08);
+    flex-shrink:0; }
+  .topbar button { background:rgba(255,255,255,0.08); border:none;
+    color:rgba(255,255,255,0.85); padding:5px 10px; border-radius:6px;
+    font-size:12px; cursor:pointer; transition:background 0.15s; font-family:inherit; }
+  .topbar button:hover { background:rgba(255,255,255,0.18); color:#fff; }
+  .topbar button.active { background:rgba(79,140,255,0.45); color:#fff; }
+  .topbar .group { display:flex; gap:5px; align-items:center; padding:0 4px; }
+  .topbar label { font-size:11px; color:rgba(255,255,255,0.45); white-space:nowrap; }
+  .topbar input[type=range] { width:72px; cursor:pointer; }
+  .stage { flex:1; position:relative; overflow:hidden; background:#0b0b0b; }
+  .scroll { width:100%; height:100%; overflow-y:auto; padding:24px 28px;
+    scrollbar-width:thin; scrollbar-color:rgba(255,255,255,0.2) transparent; }
+  .scroll::-webkit-scrollbar { width:6px; }
+  .scroll::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.2); border-radius:3px; }
+  .text { font-size:24px; line-height:1.7; white-space:pre-wrap; word-break:break-word;
+    color:#fff; padding-top:35vh; padding-bottom:65vh; font-weight:500; }
+  .focus-line { position:absolute; left:8px; right:8px; top:50%;
+    border-top:1px dashed rgba(79,140,255,0.45); pointer-events:none; }
+  .focus-line::before, .focus-line::after { content:''; position:absolute;
+    top:-4px; width:8px; height:8px; border-top:2px solid rgba(79,140,255,0.7);
+    border-right:2px solid rgba(79,140,255,0.7); }
+  .focus-line::before { left:0; transform:rotate(-45deg); }
+  .focus-line::after { right:0; transform:rotate(45deg); }
+  /* 编辑模式：用不透明背景完全覆盖滚动区，避免下层文字穿透；字号/行距/padding 与显示模式一致 */
+  .editor { position:absolute; inset:0; background:#0b0b0b; border:none;
+    outline:none; color:#fff; font-size:24px; line-height:1.7; padding:24px 28px;
+    resize:none; font-family:inherit; display:none; z-index:5;
+    white-space:pre-wrap; word-break:break-word; font-weight:500; }
+  .editor.show { display:block; }
+  .stage.editing .focus-line { display:none; }
+  .stage.editing .scroll { visibility:hidden; }
+  .hint { position:absolute; bottom:8px; left:50%; transform:translateX(-50%);
+    font-size:10px; color:rgba(255,255,255,0.3); pointer-events:none;
+    background:rgba(0,0,0,0.4); padding:2px 8px; border-radius:4px; }
+  .stage.editing .hint { display:none; }
+`;
+
+const PROMPTER_BODY = `
+  <div class="topbar">
+    <button id="btnPlay">▶ 播放</button>
+    <button id="btnReset" title="回到顶部">⟲</button>
+    <button id="btnEdit">✎ 编辑</button>
+    <div class="group"><label>速度</label><input type="range" id="speed" min="10" max="240" value="60"></div>
+    <div class="group"><label>字号</label><input type="range" id="fontsize" min="14" max="64" value="24"></div>
+  </div>
+  <div class="stage" id="stage">
+    <div class="scroll" id="scroll">
+      <div class="text" id="text">在此输入或粘贴你的演讲稿…
+
+点击「✎ 编辑」输入提词内容
+点击「▶ 播放」开始自动滚动
+速度、字号均可随时调整
+
+▎此浮窗不会被录入到视频里
+（前提：录制时选「当前标签」或「当前窗口」，而非「整个屏幕」）
+
+快捷键：
+  空格 = 播放/暂停    ↑↓ = 调节速度
+  + - = 字号        R = 回到顶部</div>
+    </div>
+    <div class="focus-line"></div>
+    <textarea class="editor" id="editor" placeholder="输入提词稿…"></textarea>
+    <div class="hint">空格 播/停 · ↑↓ 速度 · +- 字号 · R 重置</div>
+  </div>
+`;
+
+// 在指定的 document/window 里挂载提词器 UI 并绑定事件（DocPiP 同源同 document，可直接操作）
+function mountPrompter(doc, win) {
+  doc.title = '提词器';
+  const meta = doc.createElement('meta');
+  meta.setAttribute('charset', 'UTF-8');
+  doc.head.appendChild(meta);
+
+  const style = doc.createElement('style');
+  style.textContent = PROMPTER_STYLE;
+  doc.head.appendChild(style);
+
+  doc.body.innerHTML = PROMPTER_BODY;
+
+  const $ = (id) => doc.getElementById(id);
+  const stage = $('stage'), scrollEl = $('scroll'), textEl = $('text'), editorEl = $('editor');
+  const btnPlay = $('btnPlay'), btnReset = $('btnReset'), btnEdit = $('btnEdit');
+  const speedEl = $('speed'), fontsizeEl = $('fontsize');
+
+  const STORAGE_KEY = 'presenter-prompter-v1';
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+    if (saved) {
+      if (saved.text) textEl.textContent = saved.text;
+      if (saved.speed) speedEl.value = saved.speed;
+      if (saved.fontsize) fontsizeEl.value = saved.fontsize;
+    }
+  } catch (e) {}
+
+  function persist() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        text: textEl.textContent, speed: speedEl.value,
+        fontsize: fontsizeEl.value
+      }));
+    } catch (e) {}
+  }
+
+  let playing = false, editing = false, rafId = null, lastTime = 0, scrollAccum = 0;
+  const raf = win.requestAnimationFrame.bind(win);
+  const caf = win.cancelAnimationFrame.bind(win);
+
+  function tick(t) {
+    if (!playing) return;
+    if (lastTime) {
+      const dt = (t - lastTime) / 1000;
+      scrollAccum += (+speedEl.value) * dt;
+      if (scrollAccum >= 1) {
+        const inc = Math.floor(scrollAccum);
+        scrollEl.scrollTop += inc;
+        scrollAccum -= inc;
+      }
+      const max = scrollEl.scrollHeight - scrollEl.clientHeight;
+      if (scrollEl.scrollTop >= max) pause();
+    }
+    lastTime = t;
+    rafId = raf(tick);
+  }
+  function play() {
+    if (playing || editing) return;
+    playing = true; lastTime = 0; scrollAccum = 0;
+    btnPlay.textContent = '⏸ 暂停';
+    btnPlay.classList.add('active');
+    rafId = raf(tick);
+  }
+  function pause() {
+    playing = false;
+    btnPlay.textContent = '▶ 播放';
+    btnPlay.classList.remove('active');
+    if (rafId) caf(rafId);
+  }
+  function togglePlay() { playing ? pause() : play(); }
+  function reset() { scrollEl.scrollTop = 0; scrollAccum = 0; }
+
+  function toggleEdit() {
+    editing = !editing;
+    if (editing) {
+      pause();
+      editorEl.value = textEl.textContent;
+      editorEl.classList.add('show');
+      stage.classList.add('editing');
+      btnEdit.textContent = '✓ 完成';
+      btnEdit.classList.add('active');
+      editorEl.focus();
+    } else {
+      textEl.textContent = editorEl.value || '（空）';
+      editorEl.classList.remove('show');
+      stage.classList.remove('editing');
+      btnEdit.textContent = '✎ 编辑';
+      btnEdit.classList.remove('active');
+      reset();
+      persist();
+    }
+  }
+
+  function applyFontsize() {
+    textEl.style.fontSize = fontsizeEl.value + 'px';
+    editorEl.style.fontSize = fontsizeEl.value + 'px';
+    persist();
+  }
+
+  btnPlay.onclick = togglePlay;
+  btnReset.onclick = reset;
+  btnEdit.onclick = toggleEdit;
+  fontsizeEl.oninput = applyFontsize;
+  speedEl.oninput = persist;
+
+  applyFontsize();
+
+  doc.addEventListener('keydown', (e) => {
+    if (editing) {
+      if (e.key === 'Escape') toggleEdit();
+      return;
+    }
+    const k = e.key;
+    if (k === ' ') { e.preventDefault(); togglePlay(); }
+    else if (k === 'ArrowUp') { e.preventDefault(); speedEl.value = Math.min(240, +speedEl.value + 10); persist(); }
+    else if (k === 'ArrowDown') { e.preventDefault(); speedEl.value = Math.max(10, +speedEl.value - 10); persist(); }
+    else if (k === '+' || k === '=') { fontsizeEl.value = Math.min(64, +fontsizeEl.value + 2); applyFontsize(); }
+    else if (k === '-' || k === '_') { fontsizeEl.value = Math.max(14, +fontsizeEl.value - 2); applyFontsize(); }
+    else if (k.toLowerCase() === 'r') reset();
+    else if (k.toLowerCase() === 'e') toggleEdit();
+  });
+
+  doc.addEventListener('wheel', () => { if (playing) pause(); }, { passive: true });
+}
+
+async function openPrompter() {
+  if (prompterWindow) {
+    try { prompterWindow.focus(); } catch (e) {}
+    return;
+  }
+
+  // 优先尝试 Document Picture-in-Picture（Chrome 116+）
+  if ('documentPictureInPicture' in window) {
+    try {
+      const pip = await window.documentPictureInPicture.requestWindow({
+        width: 560,
+        height: 380
+      });
+      prompterWindow = pip;
+      prompterIsPip = true;
+      mountPrompter(pip.document, pip);
+      pip.addEventListener('pagehide', onPrompterDestroy);
+      btnPrompter.classList.add('active');
+      flashHint('提词器已打开 · 浮窗模式 · 始终置顶 · 不会被录入');
+      return;
+    } catch (err) {
+      console.warn('Document PiP 不可用，降级到独立窗口', err);
+      prompterWindow = null;
+      prompterIsPip = false;
+    }
+  }
+
+  // 降级：window.open
+  let popup = null;
+  try {
+    popup = window.open('', 'presenter-prompter-' + Date.now(),
+      'width=560,height=460,top=80,left=80,resizable=yes,toolbar=no,menubar=no,location=no,status=no');
+  } catch (e) {}
+  if (!popup) {
+    flashHint('弹窗被拦截 · 请允许此站弹窗后重试');
+    return;
+  }
+  popup.document.open();
+  popup.document.write('<!DOCTYPE html><html><head></head><body></body></html>');
+  popup.document.close();
+  prompterWindow = popup;
+  prompterIsPip = false;
+  mountPrompter(popup.document, popup);
+  btnPrompter.classList.add('active');
+  flashHint('提词器已打开 · 录制时选「当前标签/窗口」即不会被录入');
+
+  // popup 关闭无 pagehide 事件，轮询检测
+  if (prompterWatchTimer) clearInterval(prompterWatchTimer);
+  prompterWatchTimer = setInterval(() => {
+    if (!prompterWindow || prompterWindow.closed) onPrompterDestroy();
+  }, 500);
+}
+
+function onPrompterDestroy() {
+  prompterWindow = null;
+  prompterIsPip = false;
+  if (prompterWatchTimer) { clearInterval(prompterWatchTimer); prompterWatchTimer = null; }
+  btnPrompter.classList.remove('active');
+}
+
+function closePrompter() {
+  try { if (prompterWindow && !prompterWindow.closed) prompterWindow.close(); } catch (e) {}
+  onPrompterDestroy();
+}
+
+function togglePrompter() {
+  if (prompterWindow) closePrompter();
+  else openPrompter();
+}
+
+window.addEventListener('beforeunload', () => {
+  try { if (prompterWindow && !prompterWindow.closed) prompterWindow.close(); } catch (e) {}
+});
+
+// === 桌面 / 应用窗口 源（盖在 iframe 之上的演示层） ===
+let desktopStream = null;
+const btnDesktop = document.getElementById('btnDesktop');
+
+async function startDesktopSource() {
+  if (desktopStream) return;
+  try {
+    desktopStream = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: { ideal: 30 } },
+      audio: true,                  // 共享标签/系统音时会带上音轨
+      selfBrowserSurface: 'exclude' // 默认隐藏 presenter 自身，避免画面递归
+    });
+  } catch (err) {
+    if (err.name !== 'NotAllowedError') {
+      flashHint('桌面源失败: ' + err.message);
+      console.error(err);
+    }
+    return;
+  }
+
+  desktopVideo.srcObject = desktopStream;
+  desktopVideo.classList.add('show');
+  desktopPlaceholder.classList.remove('show');
+
+  // 用户在系统对话框点"停止共享"时同步收尾
+  desktopStream.getVideoTracks()[0].addEventListener('ended', stopDesktopSource);
+
+  btnDesktop.classList.add('active');
+  btnDesktop.textContent = '⏹ 桌面源';
+  flashHint('桌面源已开启 · 录制时选「当前标签」可一并录入桌面 + 摄像头');
+}
+
+function stopDesktopSource() {
+  if (desktopStream) {
+    desktopStream.getTracks().forEach(t => t.stop());
+    desktopStream = null;
+  }
+  desktopVideo.srcObject = null;
+  desktopVideo.classList.remove('show');
+
+  // 没加载 iframe 时露出占位提示
+  if (!pptFrame.src) desktopPlaceholder.classList.add('show');
+
+  btnDesktop.classList.remove('active');
+  btnDesktop.textContent = '📺 桌面源';
+  flashHint('桌面源已关闭');
+}
+
+function toggleDesktopSource() {
+  if (desktopStream) stopDesktopSource();
+  else startDesktopSource();
+}
+
+// 跳过 HTML，直接进入「桌面 + 出镜」模式（启动面板入口）
+async function startDesktopOnly() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 720 }, height: { ideal: 720 }, facingMode: 'user' },
+      audio: false
+    });
+    video.srcObject = stream;
+  } catch (err) {
+    showError('摄像头访问失败：' + err.message);
+    return;
+  }
+
+  launcher.style.display = 'none';
+  setPos('br');
+  toolbar.classList.add('show');
+  escapePin.classList.add('visible');
+  desktopPlaceholder.classList.add('show');
+
+  setTimeout(() => {
+    if (!toolbarLocked) toolbar.classList.remove('show');
+  }, 3000);
+
+  // 立即弹出桌面源选择，省一步点击
+  await startDesktopSource();
+}
+
+// === 屏幕录制 ===
+let mediaRecorder = null;
+let recordedChunks = [];
+let recordingStream = null;
+let micStream = null;
+let audioContext = null;
+let recordTimer = null;
+let recordStartTime = 0;
+let recPopup = null;
+const ORIGINAL_TITLE = document.title;
+
+// 画幅比例选项（参考主流平台）
+const aspects = [
+  { label: 'Auto',  ratio: null,    desc: '原始画幅' },
+  { label: '16:9',  ratio: 16/9,    desc: '横屏 / YouTube / B站' },
+  { label: '9:16',  ratio: 9/16,    desc: '竖屏 / 抖音 / 小红书 / Reels' },
+  { label: '1:1',   ratio: 1,       desc: '方形 / Instagram' },
+  { label: '4:5',   ratio: 4/5,     desc: '竖图 / Instagram Feed' },
+  { label: '3:4',   ratio: 3/4,     desc: '竖版 / 传统竖图' },
+  { label: '4:3',   ratio: 4/3,     desc: '传统 / iPad 横屏' },
+  { label: '21:9',  ratio: 21/9,    desc: '超宽屏 / 电影感' }
+];
+let aspectIndex = 0;
+
+const btnAspect = document.getElementById('btnAspect');
+const aspectMenu = document.getElementById('aspectMenu');
+
+function renderAspectMenu() {
+  aspectMenu.innerHTML = '';
+  aspects.forEach((a, i) => {
+    const item = document.createElement('div');
+    item.className = 'aspect-menu-item' + (i === aspectIndex ? ' active' : '');
+    item.innerHTML = `<span class="label">${a.label}</span><span class="desc">${a.desc}</span>`;
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      selectAspect(i);
+    });
+    aspectMenu.appendChild(item);
+  });
+}
+
+function toggleAspectMenu() {
+  if (aspectMenu.classList.contains('show')) {
+    aspectMenu.classList.remove('show');
+  } else {
+    renderAspectMenu();
+    aspectMenu.classList.add('show');
+  }
+}
+
+function selectAspect(idx) {
+  aspectIndex = idx;
+  const a = aspects[aspectIndex];
+  btnAspect.textContent = `画幅:${a.label}`;
+  aspectMenu.classList.remove('show');
+  applyWindowAspect();
+}
+
+// 键盘 A 仍然轮换（快速切换）；鼠标点按钮则弹菜单
+function cycleAspect() {
+  selectAspect((aspectIndex + 1) % aspects.length);
+}
+
+btnAspect.addEventListener('click', (e) => {
+  e.stopPropagation();
+  toggleAspectMenu();
+});
+
+document.addEventListener('mousedown', (e) => {
+  if (!aspectMenu.classList.contains('show')) return;
+  if (!btnAspect.contains(e.target) && !aspectMenu.contains(e.target)) {
+    aspectMenu.classList.remove('show');
+  }
+});
+
+// 当前 letterbox 状态（resize 失败时记录目标比例，用于 window.resize 时同步刷新）
+let letterboxRatio = null;
+
+// 切到 Auto 时清除黑边
+function clearLetterbox() {
+  letterboxRatio = null;
+  ['lbTop','lbBottom','lbLeft','lbRight'].forEach(id => {
+    document.getElementById(id).classList.remove('active');
+  });
+}
+
+// 用 4 块黑色蒙版盖出目标画幅（resize 失败时的视觉降级）
+function applyLetterbox(ratio) {
+  letterboxRatio = ratio;
+  const winW = window.innerWidth;
+  const winH = window.innerHeight;
+  const winRatio = winW / winH;
+
+  let innerW, innerH;
+  if (winRatio > ratio) {
+    innerH = winH;
+    innerW = innerH * ratio;
+  } else {
+    innerW = winW;
+    innerH = innerW / ratio;
+  }
+  const padX = (winW - innerW) / 2;
+  const padY = (winH - innerH) / 2;
+
+  const top = document.getElementById('lbTop');
+  const bottom = document.getElementById('lbBottom');
+  const left = document.getElementById('lbLeft');
+  const right = document.getElementById('lbRight');
+
+  if (padY > 0.5) {
+    top.style.cssText = `position:fixed;top:0;left:0;width:100%;height:${padY}px;background:#000;z-index:50;pointer-events:none;`;
+    bottom.style.cssText = `position:fixed;bottom:0;left:0;width:100%;height:${padY}px;background:#000;z-index:50;pointer-events:none;`;
+    top.classList.add('active'); bottom.classList.add('active');
+  } else {
+    top.classList.remove('active'); bottom.classList.remove('active');
+  }
+  if (padX > 0.5) {
+    left.style.cssText = `position:fixed;top:0;left:0;width:${padX}px;height:100%;background:#000;z-index:50;pointer-events:none;`;
+    right.style.cssText = `position:fixed;top:0;right:0;width:${padX}px;height:100%;background:#000;z-index:50;pointer-events:none;`;
+    left.classList.add('active'); right.classList.add('active');
+  } else {
+    left.classList.remove('active'); right.classList.remove('active');
+  }
+}
+
+// 把整个浏览器窗口调整到目标宽高比（录制照样录整个窗口）
+function applyWindowAspect() {
+  const a = aspects[aspectIndex];
+  if (!a.ratio) {
+    clearLetterbox();
+    flashHint('Auto · 浏览器窗口尺寸不变');
+    return;
+  }
+
+  // 浏览器 chrome（标题栏 + 标签栏 + 地址栏）的尺寸
+  const chromeW = Math.max(0, window.outerWidth - window.innerWidth);
+  const chromeH = Math.max(0, window.outerHeight - window.innerHeight);
+  const screenW = window.screen.availWidth;
+  const screenH = window.screen.availHeight;
+  const maxInnerW = screenW - chromeW - 40;
+  const maxInnerH = screenH - chromeH - 40;
+
+  let innerW, innerH;
+  if (a.ratio >= 1) {
+    innerW = Math.min(1280, maxInnerW);
+    innerH = Math.round(innerW / a.ratio);
+    if (innerH > maxInnerH) { innerH = maxInnerH; innerW = Math.round(innerH * a.ratio); }
+  } else {
+    innerH = Math.min(900, maxInnerH);
+    innerW = Math.round(innerH * a.ratio);
+    if (innerW > maxInnerW) { innerW = maxInnerW; innerH = Math.round(innerW / a.ratio); }
+  }
+
+  const outerW = innerW + chromeW;
+  const outerH = innerH + chromeH;
+  const left = Math.max(0, Math.round((screenW - outerW) / 2));
+  const top = Math.max(0, Math.round((screenH - outerH) / 2));
+
+  // 记录调整前尺寸用于校验
+  const beforeW = window.innerWidth;
+  const beforeH = window.innerHeight;
+
+  try { window.resizeTo(outerW, outerH); window.moveTo(left, top); } catch (e) {}
+
+  // 120ms 后校验是否真的生效（Chrome 在多标签/非 popup 窗口里会静默拒绝）
+  setTimeout(() => {
+    const ratioNow = window.innerWidth / window.innerHeight;
+    const noChange = (window.innerWidth === beforeW && window.innerHeight === beforeH);
+    if (noChange || Math.abs(ratioNow - a.ratio) > 0.08) {
+      // 浏览器拒绝调整 → 用黑边模拟
+      applyLetterbox(a.ratio);
+      flashHint(`${a.label} · 已用黑边模拟 · 真窗口调整请点 🪟 独立窗口`);
+    } else {
+      clearLetterbox();
+      flashHint(`${a.label} · ${window.innerWidth}×${window.innerHeight}`);
+    }
+  }, 120);
+}
+
+// 在独立 popup 窗口里重新打开（独立窗口 + 单标签 → resizeTo 才生效）
+function openAsPopup() {
+  const url = window.location.href;
+  const w = 1280, h = 800;
+  const left = Math.max(0, Math.round((screen.availWidth - w) / 2));
+  const top = Math.max(0, Math.round((screen.availHeight - h) / 2));
+  const features = `popup=yes,width=${w},height=${h},left=${left},top=${top},toolbar=no,menubar=no,location=no,status=no`;
+  const popup = window.open(url, 'presenter-popup-' + Date.now(), features);
+  if (popup) {
+    flashHint('独立窗口已打开 · 在新窗口里切画幅即可真实调整尺寸');
+  } else {
+    flashHint('弹窗被拦截 · 浏览器地址栏右侧允许此站弹窗后重试');
+  }
+}
+const recIndicator = document.getElementById('recIndicator');
+const recTimeEl = document.getElementById('recTime');
+const btnRec = document.getElementById('btnRec');
+
+// === 录制状态弹窗（独立浏览器窗口，不会被录入）===
+function openRecPopup() {
+  try {
+    recPopup = window.open('', 'presenter-rec-status',
+      'width=220,height=72,top=20,left=20,resizable=yes,toolbar=no,menubar=no,location=no,status=no');
+  } catch (e) { recPopup = null; }
+  if (!recPopup) {
+    flashHint('弹窗被拦截 · 请看浏览器标题栏的录制时长');
+    return;
+  }
+  recPopup.document.write(`
+<!DOCTYPE html><html><head><meta charset="UTF-8"><title>● REC</title>
+<style>
+  body { margin:0; background:#161616; color:#fff; font-family:-apple-system,sans-serif;
+         display:flex; align-items:center; justify-content:center; gap:10px;
+         height:100vh; user-select:none; }
+  .dot { width:10px; height:10px; border-radius:50%; background:#ff4040;
+         box-shadow:0 0 10px rgba(255,64,64,0.9);
+         animation: p 1.4s ease-in-out infinite; }
+  @keyframes p { 0%,100% { opacity:1; } 50% { opacity:0.35; } }
+  .l { font-size:11px; color:rgba(255,255,255,0.5); letter-spacing:0.5px; }
+  .t { font-size:15px; font-weight:600; font-variant-numeric:tabular-nums; }
+  button { background:rgba(255,80,80,0.25); border:1px solid rgba(255,80,80,0.4);
+           color:#fff; padding:4px 12px; border-radius:10px; font-size:12px;
+           cursor:pointer; transition:background 0.2s; }
+  button:hover { background:rgba(255,80,80,0.55); }
+</style></head>
+<body>
+  <span class="dot"></span><span class="l">REC</span>
+  <span class="t" id="t">00:00</span>
+  <button id="s">停止</button>
+</body></html>`);
+  recPopup.document.close();
+  recPopup.document.getElementById('s').onclick = () => stopRecording();
+  recPopup.addEventListener('beforeunload', () => {
+    if (mediaRecorder && mediaRecorder.state === 'recording') stopRecording();
+  });
+}
+
+function updateRecPopup(timeStr) {
+  if (recPopup && !recPopup.closed) {
+    const t = recPopup.document.getElementById('t');
+    if (t) t.textContent = timeStr;
+  }
+}
+
+function closeRecPopup() {
+  try { if (recPopup && !recPopup.closed) recPopup.close(); } catch (e) {}
+  recPopup = null;
+}
+
+async function startRecording() {
+  if (mediaRecorder && mediaRecorder.state === 'recording') return;
+
+  try {
+    // 1. 屏幕/窗口/标签捕获（用户在浏览器对话框里选择）
+    const displayStream = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: { ideal: 30 } },
+      audio: true,           // 尝试捕获系统声音（仅 Chrome 标签/全屏支持）
+      preferCurrentTab: true,
+      selfBrowserSurface: 'include'
+    });
+
+    // 2. 尝试获取麦克风（失败不影响录制）
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: false
+      });
+    } catch (err) {
+      console.warn('麦克风未授权，仅录视频/系统声音');
+      micStream = null;
+    }
+
+    // 3. 混合音轨（系统声 + 麦克风）。视频轨不做裁剪，整个窗口录什么是什么
+    const tracks = [...displayStream.getVideoTracks()];
+    const sysAudio = displayStream.getAudioTracks();
+
+    if (sysAudio.length > 0 || micStream) {
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const dest = audioContext.createMediaStreamDestination();
+      if (sysAudio.length > 0) {
+        audioContext.createMediaStreamSource(new MediaStream([sysAudio[0]])).connect(dest);
+      }
+      if (micStream) {
+        audioContext.createMediaStreamSource(micStream).connect(dest);
+      }
+      tracks.push(...dest.stream.getAudioTracks());
+    }
+
+    recordingStream = new MediaStream(tracks);
+
+    // 4. 选择编码格式（VP9 优先）
+    const mimeCandidates = [
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm'
+    ];
+    const mimeType = mimeCandidates.find(t => MediaRecorder.isTypeSupported(t)) || 'video/webm';
+
+    recordedChunks = [];
+    mediaRecorder = new MediaRecorder(recordingStream, { mimeType, videoBitsPerSecond: 5_000_000 });
+
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) recordedChunks.push(e.data);
+    };
+
+    mediaRecorder.onstop = () => {
+      const blob = new Blob(recordedChunks, { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      a.download = `presenter-${ts}.webm`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      flashHint('录像已下载');
+    };
+
+    // 用户在浏览器原生 UI 上点"停止共享"时同步停止
+    displayStream.getVideoTracks()[0].addEventListener('ended', stopRecording);
+
+    mediaRecorder.start(1000);
+    recordStartTime = Date.now();
+
+    // 不在页面里显示指示器，避免被录入；改用独立小窗 + 标题栏
+    btnRec.classList.add('recording');
+    btnRec.textContent = '⏹ 停止';
+    openRecPopup();
+    recordTimer = setInterval(updateRecordTime, 500);
+    flashHint('录制开始 · 状态显示在独立小窗');
+  } catch (err) {
+    if (err.name === 'NotAllowedError') {
+      flashHint('已取消录制');
+    } else {
+      flashHint('录制失败: ' + err.message);
+      console.error(err);
+    }
+    cleanupRecording();
+  }
+}
+
+function stopRecording() {
+  if (!mediaRecorder || mediaRecorder.state === 'inactive') return;
+  try { mediaRecorder.stop(); } catch (e) {}
+  cleanupRecording();
+}
+
+function cleanupRecording() {
+  if (recordingStream) recordingStream.getTracks().forEach(t => t.stop());
+  if (micStream) micStream.getTracks().forEach(t => t.stop());
+  if (audioContext) { try { audioContext.close(); } catch (e) {} }
+  recordingStream = null;
+  micStream = null;
+  audioContext = null;
+  clearInterval(recordTimer);
+  recordTimer = null;
+  recIndicator.classList.remove('show');
+  btnRec.classList.remove('recording');
+  btnRec.textContent = '🔴 录制';
+  closeRecPopup();
+  document.title = ORIGINAL_TITLE;
+}
+
+function toggleRecording() {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    stopRecording();
+  } else {
+    startRecording();
+  }
+}
+
+function updateRecordTime() {
+  const sec = Math.floor((Date.now() - recordStartTime) / 1000);
+  const mm = String(Math.floor(sec / 60)).padStart(2, '0');
+  const ss = String(sec % 60).padStart(2, '0');
+  const hh = Math.floor(sec / 3600);
+  const t = hh > 0 ? `${hh}:${mm}:${ss}` : `${mm}:${ss}`;
+  recTimeEl.textContent = t; // 兼容（虽然指示器已隐藏）
+  document.title = `● REC ${t} — Presenter`; // 标题栏（浏览器 chrome，不在录制范围）
+  updateRecPopup(t);
+}
+
+// === 窗口尺寸变化时摄像头 + 黑边跟随 ===
+window.addEventListener('resize', () => {
+  // 预设位置（br/bl/tr/tl）通过 CSS right/bottom 已自动跟随，无需处理
+  // 拖拽过的 bubble 按比例重新定位
+  if (bubblePosRatio) {
+    let newX = bubblePosRatio.x * window.innerWidth - currentSize / 2;
+    let newY = bubblePosRatio.y * window.innerHeight - currentSize / 2;
+    const maxX = window.innerWidth - currentSize;
+    const maxY = window.innerHeight - currentSize;
+    bubble.style.left = Math.max(0, Math.min(maxX, newX)) + 'px';
+    bubble.style.top = Math.max(0, Math.min(maxY, newY)) + 'px';
+  }
+  // letterbox 模式下重新计算黑边
+  if (letterboxRatio) applyLetterbox(letterboxRatio);
+});
+
+function showError(msg) {
+  errorMsg.textContent = msg;
+  errorMsg.style.display = 'block';
+  setTimeout(() => errorMsg.style.display = 'none', 3000);
+}
+
+// === 摄像头控制 ===
+const sizes = [
+  { label: 'XS', value: 100, desc: '小巧 · 100px' },
+  { label: 'S',  value: 140, desc: '小 · 140px' },
+  { label: 'M',  value: 180, desc: '中 · 180px' },
+  { label: 'L',  value: 240, desc: '大 · 240px' },
+  { label: 'XL', value: 320, desc: '超大 · 320px' }
+];
+const positions = [
+  { label: '右下', value: 'br', desc: '默认' },
+  { label: '左下', value: 'bl', desc: '' },
+  { label: '右上', value: 'tr', desc: '' },
+  { label: '左上', value: 'tl', desc: '' }
+];
+const SIZE_LABEL = { 100:'XS', 140:'S', 180:'M', 240:'L', 320:'XL' };
+const POS_LABEL  = { br:'右下', bl:'左下', tr:'右上', tl:'左上' };
+
+const btnSize = document.getElementById('btnSize');
+const sizeMenu = document.getElementById('sizeMenu');
+const btnPos  = document.getElementById('btnPos');
+const posMenu = document.getElementById('posMenu');
+
+function updateSizeButton() {
+  const label = SIZE_LABEL[Math.round(currentSize)] || (Math.round(currentSize) + 'px');
+  btnSize.textContent = '大小:' + label;
+}
+function updatePosButton() {
+  btnPos.textContent = '位置:' + (bubblePosRatio ? '自定义' : (POS_LABEL[currentPos] || currentPos));
+}
+
+function renderSizeMenu() {
+  sizeMenu.innerHTML = '';
+  sizes.forEach(s => {
+    const item = document.createElement('div');
+    item.className = 'aspect-menu-item' + (s.value === currentSize ? ' active' : '');
+    item.innerHTML = `<span class="label">${s.label}</span><span class="desc">${s.desc}</span>`;
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setSize(s.value);
+      sizeMenu.classList.remove('show');
+    });
+    sizeMenu.appendChild(item);
+  });
+}
+function renderPosMenu() {
+  posMenu.innerHTML = '';
+  positions.forEach(p => {
+    const item = document.createElement('div');
+    item.className = 'aspect-menu-item' + (p.value === currentPos && !bubblePosRatio ? ' active' : '');
+    item.innerHTML = `<span class="label">${p.label}</span><span class="desc">${p.desc}</span>`;
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setPos(p.value);
+      posMenu.classList.remove('show');
+    });
+    posMenu.appendChild(item);
+  });
+}
+function toggleSizeMenu() {
+  if (sizeMenu.classList.contains('show')) sizeMenu.classList.remove('show');
+  else { renderSizeMenu(); sizeMenu.classList.add('show'); posMenu.classList.remove('show'); }
+}
+function togglePosMenu() {
+  if (posMenu.classList.contains('show')) posMenu.classList.remove('show');
+  else { renderPosMenu(); posMenu.classList.add('show'); sizeMenu.classList.remove('show'); }
+}
+btnSize.addEventListener('click', (e) => { e.stopPropagation(); toggleSizeMenu(); });
+btnPos.addEventListener('click',  (e) => { e.stopPropagation(); togglePosMenu(); });
+document.addEventListener('mousedown', (e) => {
+  if (sizeMenu.classList.contains('show') && !btnSize.contains(e.target) && !sizeMenu.contains(e.target)) {
+    sizeMenu.classList.remove('show');
+  }
+  if (posMenu.classList.contains('show') && !btnPos.contains(e.target) && !posMenu.contains(e.target)) {
+    posMenu.classList.remove('show');
+  }
+});
+
+function setSize(size) {
+  currentSize = size;
+  bubble.style.width = size + 'px';
+  bubble.style.height = size + 'px';
+  updatePosFromPreset();
+  updateSizeButton();
+  flashHint(SIZE_LABEL[size] ? SIZE_LABEL[size] + ' · ' + size + 'px' : size + 'px');
+}
+
+function toggleMirror() {
+  bubble.classList.toggle('mirrored');
+  document.getElementById('btnMirror').classList.toggle('active');
+}
+
+function cycleRing() {
+  bubble.classList.remove(rings[ringIndex]);
+  ringIndex = (ringIndex + 1) % rings.length;
+  bubble.classList.add(rings[ringIndex]);
+  document.getElementById('btnRing').textContent = ringLabels[ringIndex];
+  flashHint('边框: ' + ringLabels[ringIndex]);
+}
+
+function setPos(pos) {
+  currentPos = pos;
+  bubblePosRatio = null; // 切回预设位置，清除拖拽比例
+  updatePosFromPreset();
+  updatePosButton();
+}
+
+function updatePosFromPreset() {
+  bubble.style.transition = 'all 0.4s cubic-bezier(0.16,1,0.3,1)';
+  switch(currentPos) {
+    case 'br':
+      bubble.style.bottom = MARGIN + 'px'; bubble.style.right = MARGIN + 'px';
+      bubble.style.top = 'auto'; bubble.style.left = 'auto';
+      break;
+    case 'bl':
+      bubble.style.bottom = MARGIN + 'px'; bubble.style.left = MARGIN + 'px';
+      bubble.style.top = 'auto'; bubble.style.right = 'auto';
+      break;
+    case 'tr':
+      bubble.style.top = MARGIN + 'px'; bubble.style.right = MARGIN + 'px';
+      bubble.style.bottom = 'auto'; bubble.style.left = 'auto';
+      break;
+    case 'tl':
+      bubble.style.top = MARGIN + 'px'; bubble.style.left = MARGIN + 'px';
+      bubble.style.bottom = 'auto'; bubble.style.right = 'auto';
+      break;
+  }
+  setTimeout(() => { bubble.style.transition = 'box-shadow 0.3s'; }, 450);
+}
+
+function toggleCam() {
+  camVisible = !camVisible;
+  bubble.style.display = camVisible ? 'block' : 'none';
+  document.getElementById('btnCam').textContent = camVisible ? '隐藏' : '显示';
+  document.getElementById('btnCam').classList.toggle('active', !camVisible);
+  flashHint(camVisible ? '摄像头已显示' : '摄像头已隐藏');
+}
+
+function flashHint(text) {
+  posHint.textContent = text;
+  posHint.classList.add('show');
+  clearTimeout(flashHint._t);
+  flashHint._t = setTimeout(() => posHint.classList.remove('show'), 800);
+}
+
+function showShortcuts() {
+  shortcutsHint.classList.toggle('show');
+}
+
+// === 拖拽 ===
+let isDragging = false;
+let dragStartX, dragStartY, bubbleStartX, bubbleStartY;
+
+bubble.addEventListener('mousedown', (e) => {
+  isDragging = true;
+  dragStartX = e.clientX;
+  dragStartY = e.clientY;
+  const rect = bubble.getBoundingClientRect();
+  bubbleStartX = rect.left;
+  bubbleStartY = rect.top;
+  bubble.style.transition = 'box-shadow 0.3s';
+  // 切换到 left/top 定位模式
+  bubble.style.left = rect.left + 'px';
+  bubble.style.top = rect.top + 'px';
+  bubble.style.right = 'auto';
+  bubble.style.bottom = 'auto';
+  // 拖拽时屏蔽 iframe 的鼠标事件，防止它截获 mousemove/mouseup 导致 bubble 飞走
+  pptFrame.style.pointerEvents = 'none';
+  e.preventDefault();
+});
+
+document.addEventListener('mousemove', (e) => {
+  if (!isDragging) return;
+  const dx = e.clientX - dragStartX;
+  const dy = e.clientY - dragStartY;
+  // 约束在视口内，避免拖出屏幕找不到
+  const maxX = window.innerWidth - currentSize;
+  const maxY = window.innerHeight - currentSize;
+  const newX = Math.max(0, Math.min(maxX, bubbleStartX + dx));
+  const newY = Math.max(0, Math.min(maxY, bubbleStartY + dy));
+  bubble.style.left = newX + 'px';
+  bubble.style.top = newY + 'px';
+  // 保存中心点比例，供 resize 时按比例跟随
+  bubblePosRatio = {
+    x: (newX + currentSize / 2) / window.innerWidth,
+    y: (newY + currentSize / 2) / window.innerHeight
+  };
+});
+
+function endDrag() {
+  if (!isDragging) return;
+  isDragging = false;
+  pptFrame.style.pointerEvents = '';
+  if (bubblePosRatio) updatePosButton();
+}
+
+document.addEventListener('mouseup', endDrag);
+// 鼠标移出窗口（拖出浏览器外松开）也要重置状态，否则下次回到页面 bubble 会一直跟着鼠标
+document.addEventListener('mouseleave', endDrag);
+window.addEventListener('blur', endDrag);
+
+// === 滚轮缩放 ===
+bubble.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  currentSize = Math.max(60, Math.min(500, currentSize - e.deltaY * 0.5));
+  bubble.style.width = currentSize + 'px';
+  bubble.style.height = currentSize + 'px';
+  updateSizeButton();
+}, { passive: false });
+
+// === 工具栏自动显隐 ===
+let toolbarTimeout;
+document.addEventListener('mousemove', (e) => {
+  if (launcher.style.display !== 'none') return;
+  // 底部 80px 区域显示工具栏
+  if (e.clientY > window.innerHeight - 80) {
+    toolbar.classList.add('show');
+    clearTimeout(toolbarTimeout);
+  } else if (!toolbarLocked) {
+    clearTimeout(toolbarTimeout);
+    toolbarTimeout = setTimeout(() => toolbar.classList.remove('show'), 1500);
+  }
+});
+
+// === 键盘 ===
+document.addEventListener('keydown', (e) => {
+  // 如果启动面板可见，不处理快捷键
+  if (launcher.style.display !== 'none') return;
+
+  const key = e.key.toLowerCase();
+
+  switch(key) {
+    case 'c':
+      toggleCam();
+      break;
+    case 'm':
+      toggleMirror();
+      break;
+    case 'r':
+      cycleRing();
+      break;
+    case '-':
+    case '_':
+      setSize(Math.max(60, currentSize - 30));
+      break;
+    case '=':
+    case '+':
+      setSize(Math.min(500, currentSize + 30));
+      break;
+    case '1':
+      setPos('br');
+      flashHint('右下');
+      break;
+    case '2':
+      setPos('bl');
+      flashHint('左下');
+      break;
+    case '3':
+      setPos('tr');
+      flashHint('右上');
+      break;
+    case '4':
+      setPos('tl');
+      flashHint('左上');
+      break;
+    case 't':
+      toolbarLocked = !toolbarLocked;
+      toolbar.classList.toggle('show', toolbarLocked);
+      flashHint(toolbarLocked ? '工具栏已锁定' : '工具栏自动隐藏');
+      break;
+    case 's':
+      toggleRecording();
+      break;
+    case 'a':
+      cycleAspect();
+      break;
+    case 'p':
+      togglePrompter();
+      break;
+    case 'd':
+      toggleDesktopSource();
+      break;
+    case '?':
+      showShortcuts();
+      break;
+    case 'escape':
+      shortcutsHint.classList.remove('show');
+      break;
+    // 把翻页事件传递给 iframe
+    case 'arrowdown':
+    case 'arrowup':
+    case 'arrowleft':
+    case 'arrowright':
+    case ' ':
+      try {
+        pptFrame.contentWindow.dispatchEvent(new KeyboardEvent('keydown', {
+          key: e.key,
+          code: e.code,
+          keyCode: e.keyCode,
+          which: e.which,
+          bubbles: true
+        }));
+      } catch(err) {}
+      break;
+  }
+});
+
+// 把滚轮事件也传给 iframe（用于 PPT 翻页）
+document.addEventListener('wheel', (e) => {
+  if (launcher.style.display !== 'none') return;
+  // 如果是在 bubble 上滚动，不传递
+  if (e.target.closest('.bubble')) return;
+  try {
+    pptFrame.contentWindow.dispatchEvent(new WheelEvent('wheel', {
+      deltaX: e.deltaX,
+      deltaY: e.deltaY,
+      deltaMode: e.deltaMode,
+      bubbles: true
+    }));
+  } catch(err) {}
+}, { passive: true });
+
+// 点击空白处关闭快捷键帮助
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.shortcuts-hint') && !e.target.closest('.toolbar')) {
+    shortcutsHint.classList.remove('show');
+  }
+});
+</script>
+</body>
+</html>
