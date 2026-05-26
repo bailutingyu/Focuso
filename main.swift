@@ -2,6 +2,7 @@ import Cocoa
 import AVFoundation
 import ScreenCaptureKit
 import CoreMedia
+import UniformTypeIdentifiers
 
 // MARK: - 圆形浮窗本体
 final class BubbleWindow: NSWindow {
@@ -625,22 +626,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshMenus()
     }
 
-    /// 扫描 ~/Downloads/Focuso/ 下最近一次有 project.json 的录制工程
-    private func findLatestProjectDir() -> URL? {
+    /// 扫描 ~/Downloads/Focuso/ 下的录制工程（含 project.json 或 screen.mov），按修改时间倒序
+    private func recentProjectDirs(limit: Int = 10) -> [URL] {
         let fm = FileManager.default
         guard let base = fm.urls(for: .downloadsDirectory, in: .userDomainMask).first?
             .appendingPathComponent("Focuso"),
               let items = try? fm.contentsOfDirectory(
-                at: base, includingPropertiesForKeys: [.contentModificationDateKey],
-                options: [.skipsHiddenFiles]) else { return nil }
+                at: base, includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey],
+                options: [.skipsHiddenFiles]) else { return [] }
         return items
-            .filter { fm.fileExists(atPath: $0.appendingPathComponent("project.json").path) }
+            .filter { dir in
+                fm.fileExists(atPath: dir.appendingPathComponent("project.json").path)
+                    || fm.fileExists(atPath: dir.appendingPathComponent("screen.mov").path)
+            }
             .sorted {
                 let a = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
                 let b = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
                 return a > b
-            }.first
+            }
+            .prefix(limit)
+            .map { $0 }
     }
+
+    /// 最近一次录制工程（启动时用于决定默认目录）
+    private func findLatestProjectDir() -> URL? { recentProjectDirs(limit: 1).first }
 
     // 浮窗关掉后 app 仍驻留在菜单栏，只有用户主动「退出」才结束
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
@@ -880,13 +889,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         autoItem.isEnabled = !recorder.isRecording
         menu.addItem(autoItem)
 
-        if let dir = lastProjectDir {
-            let openItem = NSMenuItem(title: "打开最近录制编辑…",
-                                      action: #selector(openLastProject(_:)), keyEquivalent: "e")
-            openItem.target = self
-            openItem.representedObject = dir
-            menu.addItem(openItem)
+        // 打开录制工程：最近列表 + 选择任意历史文件夹
+        let openRoot = NSMenuItem(title: "打开录制工程…", action: nil, keyEquivalent: "e")
+        let openMenu = NSMenu(); openMenu.autoenablesItems = false
+        let recents = recentProjectDirs(limit: 10)
+        if recents.isEmpty {
+            let none = NSMenuItem(title: "（暂无录制）", action: nil, keyEquivalent: "")
+            none.isEnabled = false
+            openMenu.addItem(none)
+        } else {
+            for dir in recents {
+                let it = NSMenuItem(title: dir.lastPathComponent,
+                                    action: #selector(openProjectAt(_:)), keyEquivalent: "")
+                it.target = self
+                it.representedObject = dir
+                openMenu.addItem(it)
+            }
         }
+        openMenu.addItem(.separator())
+        let browse = NSMenuItem(title: "选择文件夹…", action: #selector(browseProject(_:)), keyEquivalent: "")
+        browse.target = self
+        openMenu.addItem(browse)
+        openRoot.submenu = openMenu
+        menu.addItem(openRoot)
 
         // 麦克风子菜单
         let micRoot = NSMenuItem(title: "麦克风", action: nil, keyEquivalent: "")
@@ -1201,8 +1226,83 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshMenus()
     }
 
-    @objc private func openLastProject(_ sender: NSMenuItem) {
-        if let dir = sender.representedObject as? URL { openEditor(projectDir: dir) }
+    @objc private func openProjectAt(_ sender: NSMenuItem) {
+        guard let dir = sender.representedObject as? URL else { return }
+        openEditorEnsuringProject(projectDir: dir)
+    }
+
+    /// 选择任意历史录制文件夹（或它的 project.json / screen.mov）来编辑
+    @objc private func browseProject(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [UTType.json, UTType.movie]
+        panel.message = "选择录制工程文件夹（含 screen.mov），或它的 project.json"
+        if let base = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("Focuso"),
+           FileManager.default.fileExists(atPath: base.path) {
+            panel.directoryURL = base
+        }
+        guard panel.runModal() == .OK, var url = panel.url else { return }
+        // 选中的是文件就取其所在文件夹
+        var isDir: ObjCBool = false
+        FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+        if !isDir.boolValue { url = url.deletingLastPathComponent() }
+        openEditorEnsuringProject(projectDir: url)
+    }
+
+    /// 打开编辑器前确保该文件夹有 project.json（没有就用 mouse.json + 视频自动补一份）
+    private func openEditorEnsuringProject(projectDir: URL) {
+        Task { [weak self] in
+            guard let self else { return }
+            let ok = await self.ensureProjectJSON(in: projectDir)
+            await MainActor.run {
+                if ok {
+                    self.lastProjectDir = projectDir
+                    self.refreshMenus()
+                    self.openEditor(projectDir: projectDir)
+                } else {
+                    let a = NSAlert()
+                    a.messageText = "无法打开该工程"
+                    a.informativeText = "未在所选文件夹中找到可编辑的录像（screen.mov）。"
+                    a.runModal()
+                }
+            }
+        }
+    }
+
+    /// 没有 project.json 时，按录像 + mouse.json 自动生成一份并落盘；返回是否成功
+    private func ensureProjectJSON(in dir: URL) async -> Bool {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: ZoomProject.projectFileURL(in: dir).path) { return true }
+        // 找主屏录像
+        let videoName: String? = {
+            for cand in ["screen.mov", "original.mov"] {
+                if fm.fileExists(atPath: dir.appendingPathComponent(cand).path) { return cand }
+            }
+            if let items = try? fm.contentsOfDirectory(atPath: dir.path) {
+                return items.first {
+                    ($0.hasSuffix(".mov") || $0.hasSuffix(".mp4"))
+                        && $0 != "camera.mov" && !$0.hasPrefix("成片")
+                }
+            }
+            return nil
+        }()
+        guard let videoName else { return false }
+        let asset = AVURLAsset(url: dir.appendingPathComponent(videoName))
+        let dur = (try? await asset.load(.duration).seconds) ?? 0
+        var events: [MouseEvent] = []
+        if let data = try? Data(contentsOf: dir.appendingPathComponent("mouse.json")),
+           let evs = try? JSONDecoder().decode([MouseEvent].self, from: data) {
+            events = evs
+        }
+        var project = ZoomProject.generate(fromEvents: events, duration: dur, videoFile: videoName)
+        if fm.fileExists(atPath: dir.appendingPathComponent("camera.mov").path) {
+            project.cameraVideoFile = "camera.mov"
+        }
+        project.save(to: dir)
+        return true
     }
 
     /// 录制结束：建工程（写 mouse.json + project.json）→ 按需自动打开编辑器

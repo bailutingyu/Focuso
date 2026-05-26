@@ -68,10 +68,12 @@ enum ZoomCompositor {
                            duration: screenDur.seconds)
     }
 
-    static func makeVideoComposition(build: BuildResult, project: ZoomProject) -> AVMutableVideoComposition {
+    static func makeVideoComposition(build: BuildResult, project: ZoomProject,
+                                     renderSize: CGSize? = nil) -> AVMutableVideoComposition {
+        let rs = renderSize ?? build.renderSize
         let vc = AVMutableVideoComposition()
         vc.customVideoCompositorClass = TwoLayerCompositor.self
-        vc.renderSize = build.renderSize
+        vc.renderSize = rs
         vc.frameDuration = CMTime(value: 1, timescale: 60)
         let inst = TwoLayerInstruction(
             timeRange: CMTimeRange(start: .zero,
@@ -79,48 +81,237 @@ enum ZoomCompositor {
             project: project,
             screenTrackID: build.screenTrackID,
             cameraTrackID: build.cameraTrackID,
-            renderSize: build.renderSize)
+            renderSize: rs)
         vc.instructions = [inst]
         return vc
     }
 
     // MARK: 导出
 
-    static func export(build: BuildResult, project: ZoomProject,
-                       to outURL: URL, onProgress: ((Double) -> Void)? = nil) async throws {
-        let vc = makeVideoComposition(build: build, project: project)
-        guard let export = AVAssetExportSession(asset: build.composition,
-                                                presetName: AVAssetExportPresetHEVCHighestQuality) else {
-            throw RenderError.exportFailed("无法创建 AVAssetExportSession")
-        }
-        try? FileManager.default.removeItem(at: outURL)
-        export.outputURL = outURL
-        export.outputFileType = .mov
-        export.videoComposition = vc
-        export.shouldOptimizeForNetworkUse = true
+    /// 导出参数：编码 + 画质档（决定码率与分辨率上限）。容器固定 .mp4、音频固定单条 AAC。
+    struct ExportSettings {
+        enum Quality: Int {
+            case high = 0       // 源分辨率，高码率
+            case standard = 1   // 最短边降到 1080p，中码率（推荐，适配抖音/微信）
+            case small = 2      // 最短边降到 720p，低码率，文件最小
 
+            var maxShortSide: Int {   // 0 = 不缩放
+                switch self {
+                case .high: return 0
+                case .standard: return 1080
+                case .small: return 720
+                }
+            }
+            var bitsPerPixel: Double { // 码率 ≈ 输出像素数 × 系数（bit/s）
+                switch self {
+                case .high: return 3.0
+                case .standard: return 2.4
+                case .small: return 2.0
+                }
+            }
+        }
+
+        var quality: Quality = .standard
+        var useH264: Bool = true   // true=H.264（兼容优先）；false=HEVC（同画质更小，兼容差）
+
+        /// 输出分辨率：按最短边限制、保持比例、取偶数
+        func outputSize(for native: CGSize) -> CGSize {
+            func even(_ v: CGFloat) -> CGFloat { let i = max(2, Int(v.rounded())); return CGFloat(i - (i % 2)) }
+            let cap = quality.maxShortSide
+            let shorter = min(native.width, native.height)
+            guard cap > 0, shorter > CGFloat(cap) else {
+                return CGSize(width: even(native.width), height: even(native.height))
+            }
+            let s = CGFloat(cap) / shorter
+            return CGSize(width: even(native.width * s), height: even(native.height * s))
+        }
+
+        func videoSettings(outputSize sz: CGSize) -> [String: Any] {
+            let w = Int(sz.width), h = Int(sz.height)
+            let codecFactor = useH264 ? 1.0 : 0.6
+            let bitrate = max(1_000_000, Int(Double(w * h) * quality.bitsPerPixel * codecFactor))
+            var compression: [String: Any] = [
+                AVVideoAverageBitRateKey: bitrate,
+                AVVideoMaxKeyFrameIntervalKey: 60,
+                AVVideoExpectedSourceFrameRateKey: 60,
+            ]
+            let codec: AVVideoCodecType
+            if useH264 {
+                codec = .h264
+                compression[AVVideoProfileLevelKey] = AVVideoProfileLevelH264HighAutoLevel
+            } else {
+                codec = .hevc
+            }
+            return [
+                AVVideoCodecKey: codec,
+                AVVideoWidthKey: w,
+                AVVideoHeightKey: h,
+                AVVideoColorPropertiesKey: [
+                    AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+                    AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+                    AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
+                ],
+                AVVideoCompressionPropertiesKey: compression,
+            ]
+        }
+    }
+
+    /// 用 AVAssetReader（视频走自定义合成 + 音频把所有音轨混成单条）→ AVAssetWriter 导出 .mp4。
+    /// 单条 AAC 音轨解决「抖音/微信只读第一条音轨导致没声音」；可控编码/码率/分辨率解决文件过大。
+    static func export(build: BuildResult, project: ZoomProject, settings: ExportSettings,
+                       to outURL: URL, onProgress: ((Double) -> Void)? = nil) async throws {
+        let asset = build.composition
+        let outSize = settings.outputSize(for: build.renderSize)
+        let vc = makeVideoComposition(build: build, project: project, renderSize: outSize)
+
+        // 裁剪范围（reader.timeRange）；输出时间戳减去 offset 归零到 0
         let start = max(0, project.trimStart)
         let end = project.effectiveTrimEnd
-        if end > start + 0.05 {
-            export.timeRange = CMTimeRange(
-                start: CMTime(seconds: start, preferredTimescale: 600),
-                end: CMTime(seconds: end, preferredTimescale: 600))
+        let useTrim = end > start + 0.05
+        let fullDur = CMTime(seconds: max(0.1, build.duration), preferredTimescale: 600)
+        let timeRange = useTrim
+            ? CMTimeRange(start: CMTime(seconds: start, preferredTimescale: 600),
+                          end: CMTime(seconds: end, preferredTimescale: 600))
+            : CMTimeRange(start: .zero, duration: fullDur)
+        let offset = timeRange.start
+        let totalDur = timeRange.duration.seconds
+
+        let reader = try AVAssetReader(asset: asset)
+        reader.timeRange = timeRange
+
+        let allTracks = asset.tracks
+        let videoTracks: [AVAssetTrack] = allTracks.filter { $0.mediaType == .video }
+        let audioTracks: [AVAssetTrack] = allTracks.filter { $0.mediaType == .audio }
+
+        let videoOut = AVAssetReaderVideoCompositionOutput(
+            videoTracks: videoTracks,
+            videoSettings: [String(kCVPixelBufferPixelFormatTypeKey): kCVPixelFormatType_32BGRA])
+        videoOut.videoComposition = vc
+        videoOut.alwaysCopiesSampleData = false
+        guard reader.canAdd(videoOut) else { throw RenderError.exportFailed("无法读取视频帧") }
+        reader.add(videoOut)
+
+        // 把所有音轨（系统声音 + 麦克风）混成单条 PCM
+        var audioOut: AVAssetReaderAudioMixOutput?
+        if !audioTracks.isEmpty {
+            let ao = AVAssetReaderAudioMixOutput(audioTracks: audioTracks, audioSettings: [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: 48000,
+                AVNumberOfChannelsKey: 2,
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false,
+            ])
+            ao.alwaysCopiesSampleData = false
+            if reader.canAdd(ao) { reader.add(ao); audioOut = ao }
         }
 
-        let progressTimer = Timer(timeInterval: 0.25, repeats: true) { _ in
-            let p = Double(export.progress)
-            DispatchQueue.main.async { onProgress?(p) }
-        }
-        RunLoop.main.add(progressTimer, forMode: .common)
-        await export.export()
-        progressTimer.invalidate()
+        try? FileManager.default.removeItem(at: outURL)
+        let writer = try AVAssetWriter(outputURL: outURL, fileType: .mp4)
+        writer.shouldOptimizeForNetworkUse = true
 
-        switch export.status {
-        case .completed:
-            DispatchQueue.main.async { onProgress?(1) }
-        default:
-            throw RenderError.exportFailed(export.error?.localizedDescription ?? "未知错误")
+        let videoIn = AVAssetWriterInput(mediaType: .video, outputSettings: settings.videoSettings(outputSize: outSize))
+        videoIn.expectsMediaDataInRealTime = false
+        guard writer.canAdd(videoIn) else { throw RenderError.exportFailed("无法写入视频") }
+        writer.add(videoIn)
+
+        var audioIn: AVAssetWriterInput?
+        if audioOut != nil {
+            let ai = AVAssetWriterInput(mediaType: .audio, outputSettings: [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVNumberOfChannelsKey: 2,
+                AVSampleRateKey: 48000,
+                AVEncoderBitRateKey: 192000,
+            ])
+            ai.expectsMediaDataInRealTime = false
+            if writer.canAdd(ai) { writer.add(ai); audioIn = ai }
         }
+
+        guard reader.startReading() else {
+            throw RenderError.exportFailed(reader.error?.localizedDescription ?? "读取启动失败")
+        }
+        guard writer.startWriting() else {
+            throw RenderError.exportFailed(writer.error?.localizedDescription ?? "写入启动失败")
+        }
+        writer.startSession(atSourceTime: .zero)
+
+        let videoQueue = DispatchQueue(label: "export.video")
+        let audioQueue = DispatchQueue(label: "export.audio")
+
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                await pump(input: videoIn, output: videoOut, queue: videoQueue, offset: offset,
+                           reader: reader, isVideo: true, totalDur: totalDur, onProgress: onProgress)
+            }
+            if let ai = audioIn, let ao = audioOut {
+                group.addTask {
+                    await pump(input: ai, output: ao, queue: audioQueue, offset: offset,
+                               reader: reader, isVideo: false, totalDur: totalDur, onProgress: nil)
+                }
+            }
+        }
+
+        if reader.status == .failed {
+            throw RenderError.exportFailed(reader.error?.localizedDescription ?? "读取失败")
+        }
+        await writer.finishWriting()
+        guard writer.status == .completed else {
+            throw RenderError.exportFailed(writer.error?.localizedDescription ?? "写入失败")
+        }
+        DispatchQueue.main.async { onProgress?(1) }
+    }
+
+    /// 把一路 reader 输出的样本泵进对应 writer input（必要时把时间戳减 offset 归零）
+    private static func pump(input: AVAssetWriterInput, output: AVAssetReaderOutput,
+                             queue: DispatchQueue, offset: CMTime, reader: AVAssetReader,
+                             isVideo: Bool, totalDur: Double,
+                             onProgress: ((Double) -> Void)?) async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            var resumed = false
+            var lastPct = -1
+            input.requestMediaDataWhenReady(on: queue) {
+                while input.isReadyForMoreMediaData {
+                    guard reader.status == .reading, let sb = output.copyNextSampleBuffer() else {
+                        if !resumed { resumed = true; input.markAsFinished(); cont.resume() }
+                        return
+                    }
+                    let buf = (offset == .zero) ? sb : (retime(sb, by: offset) ?? sb)
+                    input.append(buf)
+                    if isVideo, totalDur > 0 {
+                        // 按整数百分比节流，避免每帧都派发主线程
+                        let pct = Int(min(1.0, CMSampleBufferGetPresentationTimeStamp(buf).seconds / totalDur) * 100)
+                        if pct != lastPct {
+                            lastPct = pct
+                            DispatchQueue.main.async { onProgress?(Double(pct) / 100) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// 复制一份样本并把所有时间戳减去 offset（用于裁剪后把成片首帧归零到 0）
+    private static func retime(_ sb: CMSampleBuffer, by offset: CMTime) -> CMSampleBuffer? {
+        var count: CMItemCount = 0
+        guard CMSampleBufferGetSampleTimingInfoArray(sb, entryCount: 0,
+                arrayToFill: nil, entriesNeededOut: &count) == noErr, count > 0 else { return nil }
+        var timings = [CMSampleTimingInfo](repeating: CMSampleTimingInfo(), count: count)
+        guard CMSampleBufferGetSampleTimingInfoArray(sb, entryCount: count,
+                arrayToFill: &timings, entriesNeededOut: &count) == noErr else { return nil }
+        for i in 0..<count {
+            if timings[i].presentationTimeStamp.isValid {
+                timings[i].presentationTimeStamp = CMTimeSubtract(timings[i].presentationTimeStamp, offset)
+            }
+            if timings[i].decodeTimeStamp.isValid {
+                timings[i].decodeTimeStamp = CMTimeSubtract(timings[i].decodeTimeStamp, offset)
+            }
+        }
+        var out: CMSampleBuffer?
+        guard CMSampleBufferCreateCopyWithNewTiming(allocator: kCFAllocatorDefault,
+                sampleBuffer: sb, sampleTimingEntryCount: count,
+                sampleTimingArray: &timings, sampleBufferOut: &out) == noErr else { return nil }
+        return out
     }
 
     // MARK: 壁纸预设
@@ -212,6 +403,13 @@ final class TwoLayerCompositor: NSObject, AVVideoCompositing {
         // 壁纸背景
         if p.background {
             out = applyBackground(out, project: p, renderSize: rs)
+        } else if abs(out.extent.width - rs.width) > 1 || abs(out.extent.height - rs.height) > 1 {
+            // 导出分辨率与源不同（如降到 1080p/720p）：把缩放后的屏幕整体贴合目标尺寸
+            let e = out.extent
+            if e.width > 1, e.height > 1 {
+                out = out.transformed(by: CGAffineTransform(scaleX: rs.width / e.width,
+                                                            y: rs.height / e.height))
+            }
         }
 
         // 摄像头层

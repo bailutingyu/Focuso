@@ -548,15 +548,57 @@ final class EditorController: NSObject, TimelineDelegate, NSWindowDelegate {
     @objc private func exportTapped() {
         guard !isExporting else { return }
         syncFromTimeline(); project.save(to: projectDir)
-        isExporting = true; exportButton.isEnabled = false
+
+        // 保存面板 + 画质/编码选择
+        let panel = NSSavePanel()
+        panel.title = "导出成片"
+        panel.canCreateDirectories = true
+        panel.allowedContentTypes = [UTType.mpeg4Movie]
+        panel.directoryURL = projectDir
         let fmt = DateFormatter(); fmt.dateFormat = "HHmmss"
-        let out = projectDir.appendingPathComponent("成片-\(fmt.string(from: Date())).mov")
+        panel.nameFieldStringValue = "成片-\(fmt.string(from: Date())).mp4"
+
+        let qualityPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        qualityPopup.addItems(withTitles: ["高质量（源分辨率）", "标准 1080p（推荐）", "小文件 720p"])
+        qualityPopup.selectItem(at: 1)
+        let codecPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        codecPopup.addItems(withTitles: ["H.264（兼容，抖音/微信稳）", "HEVC（同画质更小）"])
+        codecPopup.selectItem(at: 0)
+        panel.accessoryView = exportAccessory(quality: qualityPopup, codec: codecPopup)
+
+        panel.beginSheetModal(for: window) { [weak self] resp in
+            guard let self, resp == .OK, var url = panel.url else { return }
+            if url.pathExtension.lowercased() != "mp4" {
+                url.deletePathExtension(); url.appendPathExtension("mp4")
+            }
+            var settings = ZoomCompositor.ExportSettings()
+            settings.quality = ZoomCompositor.ExportSettings.Quality(rawValue: qualityPopup.indexOfSelectedItem) ?? .standard
+            settings.useH264 = (codecPopup.indexOfSelectedItem == 0)
+            self.runExport(to: url, settings: settings)
+        }
+    }
+
+    private func exportAccessory(quality: NSPopUpButton, codec: NSPopUpButton) -> NSView {
+        let qLabel = NSTextField(labelWithString: "画质")
+        let cLabel = NSTextField(labelWithString: "编码")
+        let stack = NSStackView(views: [qLabel, quality, cLabel, codec])
+        stack.orientation = .horizontal
+        stack.spacing = 8
+        stack.alignment = .centerY
+        stack.edgeInsets = NSEdgeInsets(top: 10, left: 16, bottom: 10, right: 16)
+        stack.frame = NSRect(x: 0, y: 0, width: 580, height: 44)
+        return stack
+    }
+
+    private func runExport(to out: URL, settings: ZoomCompositor.ExportSettings) {
+        isExporting = true; exportButton.isEnabled = false
         let snapshot = project
         Task { [weak self] in
             guard let self else { return }
             do {
-                try await ZoomCompositor.export(build: self.build, project: snapshot, to: out) { p in
-                    self.exportButton.title = "导出中 \(Int(p * 100))%"
+                try await ZoomCompositor.export(build: self.build, project: snapshot,
+                                                settings: settings, to: out) { p in
+                    Task { @MainActor in self.exportButton.title = "导出中 \(Int(p * 100))%" }
                 }
                 await MainActor.run {
                     self.isExporting = false; self.exportButton.isEnabled = true
